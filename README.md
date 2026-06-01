@@ -20,12 +20,6 @@ Clean Edition 个性化 VPS 管理脚本。
 ## 最短运行
 
 ```bash
-bash <(curl -Ls git.io)
-```
-
-上面这个太短但不可用，只是示例。请使用下面这个稳定命令：
-
-```bash
 bash <(curl -Ls https://raw.githubusercontent.com/Becauseiloveyo/racknerd-v2ray-agent-manager/main/i.sh)
 ```
 
