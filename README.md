@@ -17,10 +17,22 @@ Clean Edition 个性化 VPS 管理脚本。
 - Netflix / Grok / AI 服务连通性检测
 - VLESS-Reality 客户端参数模板
 
-## 一行运行
+## 最短运行
 
 ```bash
-curl -fsSL -o /root/racknerd_v2ray_agent_manager.sh https://raw.githubusercontent.com/Becauseiloveyo/racknerd-v2ray-agent-manager/main/racknerd_v2ray_agent_manager.sh && chmod +x /root/racknerd_v2ray_agent_manager.sh && bash /root/racknerd_v2ray_agent_manager.sh
+bash <(curl -Ls git.io)
+```
+
+上面这个太短但不可用，只是示例。请使用下面这个稳定命令：
+
+```bash
+bash <(curl -Ls https://raw.githubusercontent.com/Becauseiloveyo/racknerd-v2ray-agent-manager/main/i.sh)
+```
+
+## 保存到 VPS 后运行
+
+```bash
+curl -fsSL -o /root/rn.sh https://raw.githubusercontent.com/Becauseiloveyo/racknerd-v2ray-agent-manager/main/i.sh && bash /root/rn.sh
 ```
 
 ## 再次运行
