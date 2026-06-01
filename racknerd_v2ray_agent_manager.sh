@@ -8,7 +8,7 @@
 
 set -Eeuo pipefail
 
-VERSION="1.2.0"
+VERSION="1.3.0"
 REPO_RAW_BASE="https://raw.githubusercontent.com/Becauseiloveyo/racknerd-v2ray-agent-manager/main"
 SELF_URL="$REPO_RAW_BASE/racknerd_v2ray_agent_manager.sh"
 PLATFORM_CHECK_URL="$REPO_RAW_BASE/platform_check.sh"
@@ -19,6 +19,7 @@ SELF_PATH="/root/racknerd_v2ray_agent_manager.sh"
 INSTALL_PATH="/root/install.sh"
 AGENT_DIR="/etc/v2ray-agent"
 BACKUP_DIR="/root/vps-backups"
+REPORT_DIR="/root/vps-reports"
 LOG_FILE="/var/log/racknerd_v2ray_agent_manager.log"
 LOCK_FILE="/tmp/racknerd_v2ray_agent_manager.lock"
 ALIAS_PATH="/usr/local/bin/rn"
@@ -149,6 +150,17 @@ download_file() {
   else
     err "缺少 curl 或 wget"
     return 1
+  fi
+}
+
+service_state_text() {
+  local svc="$1"
+  if ! systemctl list-unit-files 2>/dev/null | grep -q "^${svc}\.service"; then
+    echo "未安装"
+  elif systemctl is-active "$svc" >/dev/null 2>&1; then
+    echo "运行中"
+  else
+    echo "未运行"
   fi
 }
 
@@ -565,6 +577,159 @@ health_check() {
   result_box "如果资源正常、核心服务运行中、节点端口在监听，服务端大概率没大问题。"
 }
 
+troubleshooting_guide() {
+  page_title "故障排查建议"
+  note_box "这里不是直接改配置，而是按常见现象告诉你先看哪里。\n看不懂命令输出时，先选这个。"
+
+  echo -e "${BOLD}常见问题怎么判断${NC}"
+  line
+  cat <<'EOF'
+1) 客户端连不上节点
+   先看：
+   - 2. 检测 v2ray-agent：xray/sing-box 是否运行
+   - 5/6. 防火墙端口：服务端端口是否放行
+   - 15. 配置检查：配置有没有语法错误
+   - 客户端端口、UUID、PublicKey、ShortId、SNI 是否和 vasma 输出一致
+
+   常见原因：
+   - VPS 防火墙没放行节点端口
+   - 服务端重启失败
+   - 客户端参数填错
+   - 截图泄漏参数后被别人占用或滥用
+
+2) 能连上但速度慢
+   先看：
+   - 18. 轻量测速：VPS 出口速度
+   - 1. VPS 信息：IP 地区和机房
+   - 8. 网络参数优化：只做系统 TCP 优化
+   - 晚高峰可能是线路问题，不一定是脚本问题
+
+   建议：
+   - Reality 客户端关闭 Mux
+   - Fingerprint 用 chrome
+   - 不要同时开太多设备测速
+   - 换机房/换 IP 往往比反复改参数有效
+
+3) Netflix / Grok / OpenAI 不可用
+   先看：
+   - 17. 平台可用性检测
+   - 1. VPS 信息里的国家、地区、ASN
+   - 客户端 DNS 是否走代理
+
+   说明：
+   - HTTP 能连接不等于账号和内容库一定可用
+   - 平台限制主要看 IP 信誉、账号地区和风控
+   - 脚本不能保证所有平台都能用
+
+4) vasma 菜单有推广区
+   说明：
+   - 那是 mack-a/v2ray-agent 上游菜单自带显示
+   - 不是这个个人管理脚本加的
+   - 本脚本只负责调用它，不修改上游作者信息
+
+5) 证书或域名相关问题
+   先看：
+   - 域名 A 记录是否指向 VPS IPv4
+   - 80/443 是否放行
+   - nginx 是否运行
+   - 系统时间是否准确
+
+6) 更新后出问题
+   先看：
+   - 25. 查看日志
+   - 16. 配置检查
+   - 15. 重启核心服务
+
+   建议：
+   - 更新或改配置前先选 12 备份
+   - 本脚本更新前会备份旧脚本
+EOF
+
+  next_box "想自动收集一份不含节点密钥的排查报告，回菜单选 29。\n如果时间不准，回菜单选 30 修复系统时间。"
+}
+
+generate_diagnostic_report() {
+  page_title "生成诊断报告"
+  note_box "生成一份基础报告，方便你自己排查。\n不会打包 /etc/v2ray-agent 或节点配置，不主动输出 UUID、私钥、订阅链接。"
+
+  mkdir -p "$REPORT_DIR"
+  local report="$REPORT_DIR/diagnostic-$(date +%F_%H%M%S).txt"
+
+  {
+    echo "RackNerd VPS diagnostic report"
+    echo "Generated at: $(date '+%F %T %Z')"
+    echo "Script version: $VERSION"
+    echo
+    echo "== OS =="
+    echo "Hostname: $(hostname)"
+    echo "System: $(os_pretty)"
+    echo "Kernel: $(uname -r)"
+    echo "Arch: $(uname -m)"
+    echo
+    echo "== Resources =="
+    uptime || true
+    free -h || true
+    df -h / || true
+    echo
+    echo "== Public IP =="
+    echo -n "IPv4: "; curl -4 -s --max-time 5 https://api.ipify.org || true; echo
+    echo -n "IPv6: "; curl -6 -s --max-time 5 https://api64.ipify.org || true; echo
+    echo
+    echo "== IP info =="
+    curl -4 -s --max-time 8 https://ipinfo.io/json || true
+    echo
+    echo "== DNS =="
+    cat /etc/resolv.conf 2>/dev/null || true
+    echo
+    echo "== Services =="
+    for svc in xray sing-box nginx fail2ban; do
+      echo "$svc: $(service_state_text "$svc")"
+    done
+    echo
+    echo "== Ports =="
+    ss -tulpen 2>/dev/null | grep -E ':(22|80|443|15593|8443|2053|2083|2087|2096)\b' || true
+    echo
+    echo "== Firewall =="
+    if has_cmd ufw; then ufw status verbose || true; else echo "ufw not installed"; fi
+    echo
+    echo "== Time =="
+    date
+    timedatectl 2>/dev/null || true
+    echo
+    echo "== Recent script log =="
+    tail -n 80 "$LOG_FILE" 2>/dev/null || true
+  } > "$report"
+
+  chmod 600 "$report" || true
+  result_box "诊断报告已生成：$report"
+  next_box "这份报告不包含节点配置文件，但仍可能包含你的公网 IP。\n发给别人前自己先看一遍。"
+}
+
+fix_time_sync() {
+  page_title "修复系统时间"
+  note_box "系统时间不准可能导致证书、TLS、Reality 连接异常。\n这个功能会开启系统 NTP 对时。"
+
+  if has_cmd timedatectl; then
+    timedatectl set-ntp true || true
+    sleep 2
+    timedatectl || true
+    result_box "已尝试开启系统自动对时。"
+  else
+    warn "没有 timedatectl，尝试安装 chrony。"
+    if has_cmd apt-get; then
+      pkg_install chrony
+      systemctl enable --now chrony || true
+    elif has_cmd dnf || has_cmd yum; then
+      pkg_install chrony
+      systemctl enable --now chronyd || true
+    fi
+    date
+    result_box "已尝试安装并启动 chrony。"
+  fi
+
+  next_box "如果时间仍不准，可能是 VPS 系统环境限制，重启 VPS 后再看。"
+}
+
 recommended_flow() {
   page_title "建议流程"
   note_box "适合第一次整理 VPS：先备份，再优化，再做安全检查。"
@@ -617,6 +782,7 @@ show_version() {
   echo "脚本路径: $SELF_PATH"
   echo "短命令: $ALIAS_PATH"
   echo "日志: $LOG_FILE"
+  echo "报告目录: $REPORT_DIR"
   echo "仓库: $REPO_RAW_BASE"
 }
 
@@ -671,6 +837,9 @@ main_menu() {
     menu_item 17 "平台可用性检测"            "检测流媒体/AI/社交平台连接情况"
     menu_item 18 "轻量测速"                  "下载 10MB 粗略测速"
     menu_item 19 "健康检查"                  "资源、网络、服务、端口总览"
+    menu_item 28 "故障排查建议"              "按常见问题给处理建议"
+    menu_item 29 "生成诊断报告"              "生成不含节点密钥的排查报告"
+    menu_item 30 "修复系统时间"              "开启 NTP，处理时间不准问题"
 
     section "节点和脚本"
     menu_item 20 "VLESS-Reality 参数参考"    "给客户端填参数时对照"
@@ -685,7 +854,7 @@ main_menu() {
     echo
     echo -e "  ${RED} 0${NC}. 退出"
     echo -e "${CYAN}==================================================${NC}"
-    read -rp "选择 [0-27]: " choice
+    read -rp "选择 [0-30]: " choice
 
     case "$choice" in
       1) show_server_info; pause ;;
@@ -715,6 +884,9 @@ main_menu() {
       25) view_logs; pause ;;
       26) show_version; pause ;;
       27) uninstall_hint; pause ;;
+      28) troubleshooting_guide; pause ;;
+      29) generate_diagnostic_report; pause ;;
+      30) fix_time_sync; pause ;;
       0) exit 0 ;;
       *) warn "无效选择"; sleep 1 ;;
     esac
