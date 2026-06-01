@@ -28,6 +28,16 @@ bash /root/racknerd_v2ray_agent_manager.sh
 rn
 ```
 
+## 平台连通性检测
+
+单独检测流媒体、AI、社交、游戏平台：
+
+```bash
+bash <(curl -Ls https://raw.githubusercontent.com/Becauseiloveyo/racknerd-v2ray-agent-manager/main/platform_check.sh)
+```
+
+这个检测只看 VPS 出口能不能连上，不代表一定解锁账号、片库或功能。
+
 ## 主要功能
 
 - 检测 v2ray-agent / vasma
@@ -44,6 +54,7 @@ rn
 - 重启 xray / sing-box / nginx
 - 检查 xray / sing-box / nginx 配置
 - 流媒体、Grok、OpenAI 连通性查看
+- 独立平台连通性检测脚本
 - 轻量测速
 - 安全检查
 - 查看 VLESS-Reality 参数参考
