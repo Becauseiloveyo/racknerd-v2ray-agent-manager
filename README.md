@@ -28,9 +28,23 @@ bash /root/racknerd_v2ray_agent_manager.sh
 rn
 ```
 
+## 菜单分类
+
+新版菜单按用途分组，不再全部堆在一起：
+
+```text
+安装管理
+端口和网络
+安全和备份
+维护和排查
+节点和脚本
+```
+
+每个功能右边都有一句说明，运行后也会显示“说明 / 结果 / 下一步”，普通人能看懂大概是什么意思。
+
 ## 平台连通性检测
 
-单独检测流媒体、AI、社交、游戏平台：
+主菜单第 17 项可以检测平台连接情况，也可以单独运行：
 
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/Becauseiloveyo/racknerd-v2ray-agent-manager/main/platform_check.sh)
@@ -53,8 +67,7 @@ bash <(curl -Ls https://raw.githubusercontent.com/Becauseiloveyo/racknerd-v2ray-
 - 查看备份
 - 重启 xray / sing-box / nginx
 - 检查 xray / sing-box / nginx 配置
-- 流媒体、Grok、OpenAI 连通性查看
-- 独立平台连通性检测脚本
+- 平台可用性检测
 - 轻量测速
 - 安全检查
 - 查看 VLESS-Reality 参数参考
@@ -68,14 +81,16 @@ bash <(curl -Ls https://raw.githubusercontent.com/Becauseiloveyo/racknerd-v2ray-
 ```text
 12. 备份配置
 22. 建议流程
-16. 流媒体/Grok/OpenAI 连通性
-18. 安全检查
+17. 平台可用性检测
+14. 安全检查
 23. 安装 rn 短命令
 ```
 
 ## 说明
 
 这个脚本本身没有广告。
+
+v2ray-agent 上游菜单里显示的作者、版本、推广区，是 mack-a/v2ray-agent 原脚本自带的，不是这个个人管理脚本加的。
 
 这个脚本不会保证解锁 Netflix、Grok、OpenAI 或其他平台。能不能用主要看 VPS IP、账号地区、平台风控、客户端 DNS 和分流。
 
