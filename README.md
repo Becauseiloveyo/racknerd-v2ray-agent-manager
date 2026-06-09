@@ -1,186 +1,125 @@
-# RackNerd VPS 管理脚本
+# 我的 VPS 一键管理脚本
 
-自己用的 RackNerd VPS 管理脚本。
+这个仓库以后主要维护一个脚本：
 
-这个仓库不是 v2ray-agent 官方项目，也不是 mack-a 原版脚本。它只是一个入口和维护菜单：安装、检测、备份、加固、测速、查看连通性。真正的 v2ray-agent 还是从 mack-a 官方 GitHub 源下载。
+```text
+my_vps_manager.sh
+```
 
-## 全新安装推荐
+它是给我自己的 RackNerd VPS 定制的，不是 v2ray-agent 官方项目，也不是 mack-a 原版脚本。
 
-如果你准备重装系统后重新搭，建议先跑这个：
+底层节点安装仍然调用 mack-a/v2ray-agent 官方脚本；这个仓库只做入口、初始化、检测、备份、排查和客户端提示。
+
+## 一行运行
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/Becauseiloveyo/racknerd-v2ray-agent-manager/main/fresh_setup.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/Becauseiloveyo/racknerd-v2ray-agent-manager/main/my_vps_manager.sh)
 ```
 
-它会做这些事：
+## 以后打开
+
+第一次运行后，菜单里选：
 
 ```text
-安装基础工具
-查看 VPS 信息
-修复时间和 DNS
-开启 BBR 和基础网络参数
-检查 80/443/15593 端口占用
-放行 22/80/443/15593
-安装你的管理脚本和 rn 短命令
-下载 v2ray-agent 官方脚本
-给出推荐安装方案
+9. 更新本脚本
 ```
 
-这次建议：
-
-```text
-VLESS + Reality + Vision
-端口优先 443
-flow: xtls-rprx-vision
-fingerprint: chrome
-Mux: 关闭
-IPv6: 客户端先关闭或优先 IPv4
-DNS: 客户端 DNS 走代理
-```
-
-## 普通一行运行
+之后可以直接输入：
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/Becauseiloveyo/racknerd-v2ray-agent-manager/main/i.sh)
+myvps
 ```
 
-## 再次打开
+## 菜单功能
+
+只保留实用功能：
+
+```text
+1. 首次准备       装工具、修 DNS/时间、防火墙、BBR
+2. 安装/管理节点  打开 v2ray-agent，上游菜单只用来装节点
+3. 服务和端口     看 443/8443/2053/15593 和核心服务
+4. 备份配置       备份节点、Xray、sing-box、nginx
+5. AI 检测        看 GPT/Grok 相关出口状态
+6. 影视检测       看常见媒体平台出口状态
+7. 客户端建议     v2rayN/v2rayNG 专用设置
+8. 查看日志       出问题先看这里
+9. 更新本脚本     以后只维护这个脚本
+0. 退出
+```
+
+## 推荐安装方式
+
+重装 Debian 12 后，先运行：
 
 ```bash
-bash /root/racknerd_v2ray_agent_manager.sh
+bash <(curl -Ls https://raw.githubusercontent.com/Becauseiloveyo/racknerd-v2ray-agent-manager/main/my_vps_manager.sh)
 ```
 
-进菜单后可以装短命令：
+然后按顺序：
 
 ```text
-23. 安装 rn 短命令
+1. 首次准备
+2. 安装/管理节点
 ```
 
-以后直接输入：
-
-```bash
-rn
-```
-
-## 菜单分类
-
-新版菜单按用途分组，不再全部堆在一起：
+进入 v2ray-agent 后，建议只安装一个主节点：
 
 ```text
-安装管理
-端口和网络
-安全和备份
-维护和排查
-节点和脚本
+协议：VLESS Reality Vision
+端口：443 优先
+备用端口：8443 / 2053 / 15593
+flow：xtls-rprx-vision
+fingerprint：chrome
+Mux：关闭
 ```
 
-每个功能右边都有一句说明，运行后也会显示“说明 / 结果 / 下一步”，普通人能看懂大概是什么意思。
-
-## 故障排查
-
-新增了几个适合新手的功能：
+## v2rayN / v2rayNG 建议
 
 ```text
-28. 故障排查建议
-29. 生成诊断报告
-30. 修复系统时间
+先用全局模式测试
+Mux 关闭
+IPv6 关闭或优先 IPv4
+DNS 尽量走节点，不要依赖运营商 DNS
+Reality fingerprint 用 chrome
 ```
 
-`28` 会按常见问题给建议，比如客户端连不上、速度慢、Netflix/Grok/OpenAI 不可用、证书/域名异常、更新后出问题。
-
-`29` 会生成一份基础诊断报告，默认放在：
+如果 v2rayN 测速显示 -1 ms，不要直接判断 VPS 坏了，先看：
 
 ```text
-/root/vps-reports/
-```
-
-诊断报告不会打包节点配置文件，不会主动输出 UUID、私钥或订阅链接，但会包含公网 IP，发给别人前先自己看一遍。
-
-`30` 会尝试开启系统 NTP 对时。系统时间不准时，TLS、证书、Reality 连接都可能异常。
-
-## 平台连通性检测
-
-主菜单第 17 项可以检测平台连接情况，也可以单独运行：
-
-```bash
-bash <(curl -Ls https://raw.githubusercontent.com/Becauseiloveyo/racknerd-v2ray-agent-manager/main/platform_check.sh)
-```
-
-这个检测只看 VPS 出口能不能连上，不代表一定解锁账号、片库或功能。
-
-## 主要功能
-
-- 检测 v2ray-agent / vasma
-- 安装或更新 v2ray-agent
-- 打开 vasma
-- 放行常用端口或自定义端口
-- 开启 BBR
-- 调整常用 TCP 参数
-- 回滚本脚本写入的网络优化
-- 开启 fail2ban 防 SSH 爆破
-- 设置 VPS 自身 DNS
-- 备份配置
-- 查看备份
-- 重启 xray / sing-box / nginx
-- 检查 xray / sing-box / nginx 配置
-- 平台可用性检测
-- 轻量测速
-- 安全检查
-- 故障排查建议
-- 生成诊断报告
-- 修复系统时间
-- 查看 VLESS-Reality 参数参考
-- 自更新脚本
-- 查看日志
-
-## 建议顺序
-
-重装系统后：
-
-```text
-运行 fresh_setup.sh
-按提示进入 v2ray-agent 菜单
-优先安装 VLESS Reality Vision 443
-导入手机/电脑测试
-回到 rn 做平台检测和健康检查
-```
-
-已有环境普通整理：
-
-```text
-12. 备份配置
-22. 建议流程
-17. 平台可用性检测
-14. 安全检查
-23. 安装 rn 短命令
-```
-
-遇到问题时建议：
-
-```text
-28. 故障排查建议
-19. 健康检查
-29. 生成诊断报告
-25. 查看日志
+3. 服务和端口
+8. 查看日志
 ```
 
 ## 说明
 
-这个脚本本身没有广告。
+这个脚本不承诺任何 AI 或影视平台 100% 解锁。
 
-v2ray-agent 上游菜单里显示的作者、版本、推广区，是 mack-a/v2ray-agent 原脚本自带的，不是这个个人管理脚本加的。
+平台是否可用主要取决于：
 
-这个脚本不会保证解锁 Netflix、Grok、OpenAI 或其他平台。能不能用主要看 VPS IP、账号地区、平台风控、客户端 DNS 和分流。
+```text
+VPS IP 信誉
+ASN / 机房类型
+账号地区
+客户端 DNS
+运营商线路
+平台风控
+```
 
-不要把这些东西发到公开仓库或截图给别人：
+脚本能做的是提高稳定性、减少常见配置问题、让排查更清楚。
 
-- UUID
-- PrivateKey
-- ShortId
-- PublicKey
-- 节点链接
-- 订阅链接
-- 证书
-- 备份压缩包
+## 安全提醒
 
-如果之前截图露出过节点参数，建议进 `vasma` 重置用户，再重新导入客户端。
+不要公开这些内容：
+
+```text
+UUID
+PrivateKey
+ShortId
+PublicKey
+节点链接
+订阅链接
+证书
+备份压缩包
+```
+
+如果截图或聊天里泄露过节点参数，建议进 v2ray-agent 重置用户后重新导入客户端。
