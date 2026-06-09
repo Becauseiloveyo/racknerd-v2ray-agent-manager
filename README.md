@@ -4,7 +4,41 @@
 
 这个仓库不是 v2ray-agent 官方项目，也不是 mack-a 原版脚本。它只是一个入口和维护菜单：安装、检测、备份、加固、测速、查看连通性。真正的 v2ray-agent 还是从 mack-a 官方 GitHub 源下载。
 
-## 一行运行
+## 全新安装推荐
+
+如果你准备重装系统后重新搭，建议先跑这个：
+
+```bash
+bash <(curl -Ls https://raw.githubusercontent.com/Becauseiloveyo/racknerd-v2ray-agent-manager/main/fresh_setup.sh)
+```
+
+它会做这些事：
+
+```text
+安装基础工具
+查看 VPS 信息
+修复时间和 DNS
+开启 BBR 和基础网络参数
+检查 80/443/15593 端口占用
+放行 22/80/443/15593
+安装你的管理脚本和 rn 短命令
+下载 v2ray-agent 官方脚本
+给出推荐安装方案
+```
+
+这次建议：
+
+```text
+VLESS + Reality + Vision
+端口优先 443
+flow: xtls-rprx-vision
+fingerprint: chrome
+Mux: 关闭
+IPv6: 客户端先关闭或优先 IPv4
+DNS: 客户端 DNS 走代理
+```
+
+## 普通一行运行
 
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/Becauseiloveyo/racknerd-v2ray-agent-manager/main/i.sh)
@@ -101,7 +135,17 @@ bash <(curl -Ls https://raw.githubusercontent.com/Becauseiloveyo/racknerd-v2ray-
 
 ## 建议顺序
 
-第一次跑，建议这样来：
+重装系统后：
+
+```text
+运行 fresh_setup.sh
+按提示进入 v2ray-agent 菜单
+优先安装 VLESS Reality Vision 443
+导入手机/电脑测试
+回到 rn 做平台检测和健康检查
+```
+
+已有环境普通整理：
 
 ```text
 12. 备份配置
