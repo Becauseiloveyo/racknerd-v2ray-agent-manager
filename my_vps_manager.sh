@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="1.1.0"
+VERSION="1.2.0"
 REPO="https://raw.githubusercontent.com/Becauseiloveyo/racknerd-v2ray-agent-manager/main"
 UPSTREAM="https://raw.githubusercontent.com/mack-a/v2ray-agent/master/install.sh"
 LOG="/var/log/my_vps_manager.log"
 SELF="/root/my_vps_manager.sh"
 BIN="/usr/local/bin/myvps"
 PORTS="22 80 443 8443 2053 15593"
+REPORT_DIR="/root/my-vps-reports"
 
 if [[ -t 1 ]]; then
   R='\033[0;31m'; G='\033[0;32m'; Y='\033[1;33m'; B='\033[0;34m'; C='\033[0;36m'; W='\033[1m'; D='\033[2m'; N='\033[0m'
@@ -32,14 +33,9 @@ header(){
   echo -e "版本: $VERSION    主脚本: my_vps_manager.sh\n"
 }
 
-install_self(){
-  need_root
-  if [[ -f "$SELF" ]]; then chmod 700 "$SELF" || true; fi
-  if [[ -f "$SELF" ]]; then ln -sf "$SELF" "$BIN" || true; fi
-}
-
 install_base(){
   need_root
+  mkdir -p "$REPORT_DIR"
   if has apt-get; then
     apt-get update
     DEBIAN_FRONTEND=noninteractive apt-get install -y curl wget ca-certificates jq ufw lsof iproute2 dnsutils cron tar unzip openssl fail2ban
@@ -96,6 +92,42 @@ ports_status(){
   done
 }
 
+node_hint(){
+  echo "节点安装建议："
+  echo "- 主节点：VLESS Reality Vision"
+  echo "- 主端口：443"
+  echo "- 备用端口：8443 / 2053 / 15593"
+  echo "- flow：xtls-rprx-vision"
+  echo "- fingerprint：chrome"
+  echo "- Mux：关闭"
+  echo
+  if [[ -d /etc/v2ray-agent ]]; then
+    ok "检测到 /etc/v2ray-agent，说明系统里存在 v2ray-agent 配置目录。"
+  else
+    warn "未检测到 /etc/v2ray-agent。还没有安装，或不是 v2ray-agent 环境。"
+  fi
+  echo
+  echo "安全说明：本脚本不会直接打印 UUID、PrivateKey、ShortId 或节点链接。"
+  echo "需要查看/重置节点，请进：2. 安装/管理节点"
+}
+
+carrier_diag(){
+  echo "运营商/热点诊断："
+  echo
+  ports_status
+  echo "建议在 Windows v2rayN 电脑上分别连不同网络后测试："
+  echo "  Test-NetConnection 你的VPS_IP -Port 443"
+  echo "  Test-NetConnection 你的VPS_IP -Port 8443"
+  echo "  Test-NetConnection 你的VPS_IP -Port 2053"
+  echo "  Test-NetConnection 你的VPS_IP -Port 15593"
+  echo
+  echo "判断："
+  echo "- 同一节点，移动能用、联通不行：多半是运营商线路/端口问题。"
+  echo "- iPhone 热点不行、其他热点能用：多半是热点网络、IPv6、DNS 或运营商出口问题。"
+  echo "- 443 能通，高位端口不通：优先保留 Reality 443。"
+  echo "- 端口通但客户端不通：看 v2rayN/v2rayNG 的路由、DNS、Mux、IPv6。"
+}
+
 backup_conf(){
   need_root
   local dir="/root/my-vps-backup-$(date +%F_%H%M%S)"
@@ -107,12 +139,76 @@ backup_conf(){
   ok "备份完成: $dir"
 }
 
+redact(){
+  sed -E \
+    -e 's#vless://[^[:space:]]+#vless://***REDACTED***#g' \
+    -e 's#trojan://[^[:space:]]+#trojan://***REDACTED***#g' \
+    -e 's#[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}#***UUID***#g' \
+    -e 's#(privateKey|PrivateKey|shortId|ShortId|password|passwd|uuid|id)[":= ]+[^, }]+#\1: ***REDACTED***#g'
+}
+
+safe_report(){
+  need_root
+  mkdir -p "$REPORT_DIR"
+  local f="$REPORT_DIR/report-$(date +%F_%H%M%S).txt"
+  {
+    echo "My VPS Safe Diagnostic Report"
+    echo "Time: $(date '+%F %T %Z')"
+    echo
+    echo "== System =="
+    grep -E '^PRETTY_NAME=' /etc/os-release 2>/dev/null || true
+    uname -a
+    free -h || true
+    df -h / || true
+    echo
+    echo "== IP / ASN =="
+    curl -4 -s --max-time 8 https://ipinfo.io/json || true
+    echo
+    echo "== DNS =="
+    cat /etc/resolv.conf 2>/dev/null || true
+    echo
+    echo "== Time =="
+    date
+    timedatectl 2>/dev/null | sed -n '1,12p' || true
+    echo
+    echo "== Ports =="
+    ss -tulpen 2>/dev/null | grep -E ':(22|80|443|8443|2053|15593)\b' || true
+    echo
+    echo "== Services =="
+    for s in xray sing-box nginx fail2ban; do
+      systemctl --no-pager --full status "$s" 2>/dev/null | sed -n '1,10p' || true
+      echo
+    done
+    echo "== Recent Manager Log =="
+    tail -n 120 "$LOG" 2>/dev/null | redact || true
+    echo
+    echo "== Recent Xray Log =="
+    journalctl -u xray -n 80 --no-pager 2>/dev/null | redact || true
+  } > "$f"
+  chmod 600 "$f" || true
+  ok "安全诊断报告已生成：$f"
+  warn "报告不主动读取配置文件，但仍会包含公网 IP。发给别人前自己先看一遍。"
+}
+
 open_installer(){
   need_root
   if has vasma; then vasma; return; fi
   dl "$UPSTREAM" /root/install.sh
   chmod 700 /root/install.sh
   bash /root/install.sh
+}
+
+leak_tip(){
+  echo "泄露处理提醒："
+  echo "如果你曾经截图、发聊天、发仓库时暴露过以下内容："
+  echo "- UUID"
+  echo "- PrivateKey"
+  echo "- PublicKey"
+  echo "- ShortId"
+  echo "- 节点链接 / 订阅链接"
+  echo
+  echo "建议进入：2. 安装/管理节点"
+  echo "然后在 v2ray-agent 里重置用户或重新生成节点，再重新导入 v2rayN/v2rayNG。"
 }
 
 client_tips(){
@@ -138,6 +234,8 @@ v2rayNG：
 - 规则模式下，AI 相关域名要放在直连规则前面
 - 手机热点网络不稳时，先关 IPv6 或优先 IPv4
 EOF
+  echo
+  leak_tip
 }
 
 status_text(){
@@ -212,11 +310,11 @@ main_menu(){
     header
     echo -e "${G}1${N}. 首次准备       ${D}装工具、修 DNS/时间、防火墙、BBR${N}"
     echo -e "${G}2${N}. 安装/管理节点  ${D}打开 v2ray-agent，上游菜单只用来装节点${N}"
-    echo -e "${G}3${N}. 服务和端口     ${D}看 443/8443/2053/15593 和核心服务${N}"
-    echo -e "${G}4${N}. 备份配置       ${D}备份节点、Xray、sing-box、nginx${N}"
+    echo -e "${G}3${N}. 状态/运营商诊断 ${D}端口、服务、联通/移动/热点排查${N}"
+    echo -e "${G}4${N}. 备份/诊断报告   ${D}备份配置，生成安全排查报告${N}"
     echo -e "${G}5${N}. AI 检测        ${D}GPT/Grok/OpenAI/X 出口状态${N}"
     echo -e "${G}6${N}. 影视检测       ${D}YouTube/Netflix/Disney 等出口状态${N}"
-    echo -e "${G}7${N}. 客户端建议     ${D}v2rayN/v2rayNG 专用设置${N}"
+    echo -e "${G}7${N}. 客户端/安全建议 ${D}v2rayN/v2rayNG 和泄露重置提醒${N}"
     echo -e "${G}8${N}. 查看日志       ${D}出问题先看这里${N}"
     echo -e "${G}9${N}. 更新本脚本     ${D}以后只维护这个脚本${N}"
     echo -e "${G}0${N}. 退出"
@@ -225,8 +323,8 @@ main_menu(){
     case "$c" in
       1) header; update_self; install_base; fix_basic; vps_info; pause ;;
       2) open_installer ;;
-      3) header; ports_status; pause ;;
-      4) header; backup_conf; pause ;;
+      3) header; node_hint; echo; carrier_diag; pause ;;
+      4) header; backup_conf; safe_report; pause ;;
       5) header; ai_test; pause ;;
       6) header; media_test; pause ;;
       7) header; client_tips; pause ;;
@@ -241,6 +339,8 @@ case "${1:-}" in
   update) update_self ;;
   fix) install_base; fix_basic ;;
   status) ports_status ;;
+  diag) node_hint; echo; carrier_diag ;;
+  report) safe_report ;;
   ai) ai_test ;;
   media) media_test ;;
   tips) client_tips ;;
