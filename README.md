@@ -1,4 +1,4 @@
-# MyVPS（自有管理器）— v2.2.0-rc1
+# MyVPS（自有管理器）— v2.2.1-rc2
 
 这是 RackNerd / Debian VPS 的**非破坏性维护脚本**。目标是逐步迁移到自有 Xray-core 管理，不再调用 `mack-a/v2ray-agent` 的安装菜单。
 
@@ -40,34 +40,43 @@ bash my_vps_manager.sh doctor
 | `xray-install` | 从 XTLS 官方 release 下载并比对 SHA-256，安装隔离的二进制 | 是，需要确认 |
 | `reality-init` | 生成 localhost 15594 的独立 REALITY 配置及停止状态的 systemd 单元 | 是，需要确认 |
 | `xray-start` | 仅启动 `myvps-xray.service` | 是，需要确认 |
-| `backup-init` | 初始化备份加密口令 | 是，需要确认 |
+| `backup-init` | 初始化第二 Google Drive 远端和加密密钥 | 是，需要确认 |
 | `backup-vps` | AES-256 加密 VPS 文件级归档并上传 | 是 |
 | `backup-blog` | 单独加密备份 `/root/my-blog` 及其相关配置 | 是 |
-| `backup-timers` | 安装每周独立备份 timer | 是，需要确认 |
+| `backup-timers` | 安装每天双任务 systemd timer | 是，需要确认 |
 
 ### 为什么没有直接提供 XHTTP 一键切换
 
 现有 Cloudflare-WS 尚可使用；XHTTP 能否走 CDN 取决于客户端、Cloudflare、nginx、回源链路和 Xray 版本的匹配。**不会在未经测试时替换正在工作的 WS/443 配置**。后续应新增独立节点、对比故障率/吞吐/延迟，通过再迁移。
 
-## 加密备份：Google Drive（VPS 与博客分开）
+## VPS 实测适配：独立 Google Drive AES-256 备份（v2.2.1-rc2）
 
-支持已配置的 rclone 远端 `ggdrive:`，若不存在则使用 `gdrive:`；可通过 `MYVPS_BACKUP_REMOTE` 指定其他现有远端。备份**先在本地经 GnuPG AES-256 加密，再上传**，即使目标 remote 是普通 Google Drive 也不会上传明文归档。
+2026-10-08 已核实：Debian 12 / 1 vCPU / 960MiB；REALITY、nginx、SOCKS 链式出口正常。博客目录约 36MB，使用 SQLite `blog.db`。两个 Google Drive 远端中，第 2 个可读取云端 `VPS-Backups`；旧备份最后更新于 2026-06-09。
 
-- VPS 文件：`VPS-Backups/racknerd/full/`
-- 博客文件：`VPS-Backups/racknerd/blog/`
-- VPS 归档包含 `/etc`、`/root`、`/opt`、`/var/www`、`/usr/local/etc`（仅存在路径；排除 cache/node_modules/.git）。
-- 博客归档包含 `/root/my-blog`、`/root/.pm2`、`/etc/nginx`（仅存在路径）。
-- 备份密钥在 `/etc/myvps/backup.pass`，权限 600。**务必另存离线恢复副本**，不要提交 GitHub、聊天或明文云盘。
-- 定时任务需要显式执行 `backup-timers`，每周日以 VPS 本地时区 02:00（VPS）和 03:00（blog）运行。
+因此备份采用**独立辅助脚本** `myvps_backup.sh`，安装于 `/opt/myvps/backup/myvps_backup.sh`，**不覆盖**线上旧管理器、代理、nginx 或任何旧备份。
 
-> 文件级备份不等于整机磁盘镜像，不保证数据库的一致性；实际 MySQL/PostgreSQL 数据库应有独立的事务一致备份。执行备份后必须实测解密与恢复。云备份运行依赖 root 环境可以使用的 rclone 配置及授权。
+- `init`：选择已检查可访问的第二个 rclone 远端，并生成 `/etc/myvps/backup.pass` 加密口令。**必须将口令单独保存到离线安全位置，否则 VPS 丢失后无法恢复云端归档。**
+- `probe`：上传加密测试文件、核对远端校验和、删除测试文件（仅操作新建文件）。
+- `run config`：归档系统 `/etc` 和已知 VPS 管理脚本、rclone 与 ACME 配置；**不包含备份密钥**。
+- `run blog`：在隔离临时目录复制 `/root/my-blog`（排除 `node_modules`、`.git`），对 SQLite 库使用 Python `sqlite3.backup()` 生成一致性快照。
+- `restore-test config` / `restore-test blog`：从云端下载最新文件并解密、校验 tar 内容，不覆盖线上文件。
+- `timers`：北京时间每日 02:00 备份系统配置、02:30 备份博客，通过 systemd timer 自动执行。
 
-离线恢复思路（**仅在隔离测试机执行**）：
+备份加密方式 GPG AES256，目标 `VPS-Backups/racknerd/config/` 和 `VPS-Backups/racknerd/blog/`。上传采用 rclone，随后进行云端文件校验和比对。所有操作默认不触及旧目录对象。
+
+运行方式：
 ```bash
-gpg --batch --pinentry-mode loopback --passphrase-file /path/to/offline/backup.pass \
-  --decrypt -o restored.tar.gz encrypted-backup.tar.gz.gpg
-tar -tzf restored.tar.gz | head
+sudo bash /opt/myvps/backup/myvps_backup.sh init
+sudo bash /opt/myvps/backup/myvps_backup.sh probe
+sudo bash /opt/myvps/backup/myvps_backup.sh run config
+sudo bash /opt/myvps/backup/myvps_backup.sh run blog
+sudo bash /opt/myvps/backup/myvps_backup.sh restore-test config
+sudo bash /opt/myvps/backup/myvps_backup.sh restore-test blog
+sudo bash /opt/myvps/backup/myvps_backup.sh timers
+systemctl list-timers --all 'myvps-backup-*'
 ```
+
+**注意**：当前只备份系统配置和博客内容，并非完整硬盘镜像；不包含外部数据库。首次上线必须验证上传和恢复。暂不自动清理旧备份对象；需要单独配置容量监测和保留策略。
 
 ## 回滚边界
 
