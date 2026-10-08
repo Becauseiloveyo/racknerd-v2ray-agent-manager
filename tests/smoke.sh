@@ -9,15 +9,17 @@ python3 -m py_compile myvps_runtime.py myvps_backup_watch.py
 python3 myvps_backup_watch.py --self-test
 python3 myvps_runtime.py status > /tmp/myvps-runtime-status.txt
 python3 myvps_runtime.py backup-status > /tmp/myvps-runtime-backup.txt
-grep -q "manager_release=2.3.1-rc2" /tmp/myvps-runtime-status.txt
+grep -q "manager_release=2.3.1-rc3" /tmp/myvps-runtime-status.txt
+grep -q "reality_client_server_address=2b.gooffu.tech" /tmp/myvps-runtime-status.txt
 grep -q "restore-test" myvps_backup.sh
 bash "$script" help > /tmp/myvps-help.txt
-grep -q '2.3.1-rc2' /tmp/myvps-help.txt
+grep -q '2.3.1-rc3' /tmp/myvps-help.txt
 grep -q 'reality-init' /tmp/myvps-help.txt
 grep -q 'legacy-exit' /tmp/myvps-help.txt
 grep -q 'backup-status' /tmp/myvps-help.txt
 grep -q 'chain-test' /tmp/myvps-help.txt
 grep -q 'xhttp-status' /tmp/myvps-help.txt
+grep -q 'reality-domain-status' /tmp/myvps-help.txt
 grep -q 'backup-watch' /tmp/myvps-help.txt
 
 # No privileged mutations should occur in read-only inspection.
