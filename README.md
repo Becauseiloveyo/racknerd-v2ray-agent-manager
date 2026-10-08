@@ -1,4 +1,4 @@
-# MyVPS（自有管理器）— v2.3.1-rc2
+# MyVPS（自有管理器）— v2.3.1-rc3
 
 这是 RackNerd / Debian VPS 的**非破坏性维护脚本**。目标是对**已稳定运行的 RackNerd VPS**进行兼容维护。当前不迁移生产 REALITY、住宅 SOCKS 链式出站或 Cloudflare WS；保留线上三个旧管理器并提供统一只读巡检和备份入口。
 
@@ -27,6 +27,16 @@ bash my_vps_manager.sh doctor
 ```
 
 在正式部署之前保留完整快照、nginx stream 配置和 Xray 密钥；`self-install` 只在 `/opt/myvps/bin/` 安装并行测试版，不覆盖现有管理器。额外的 Xray 实例属于可选实验，不应取代正在运行的系统。
+
+## REALITY 连接域名（用户确认）
+
+**现有 REALITY 客户端的服务器地址为 `2b.gooffu.tech`，公网端口 443。** 对应 Xray REALITY 入站当前监听内部 24443，前面由 nginx stream 分流。Cloudflare WS / XHTTP 使用另一个域名 `cf.gooffu.tech`，博客使用 `blog.gooffu.tech`。
+
+**`2b.gooffu.tech` 是客户端连接地址，不一定是 REALITY TLS SNI。** 实际 SNI / REALITY target 由现有服务配置的 `realitySettings.serverNames` / `target` 以及客户端对应 SNI 决定。nginx `ssl_preread` 读取握手中的 SNI，不会因为客户端填的是 `2b.gooffu.tech` 就必然按该域名分流。更新管理器只检查域名 DNS 和 TCP 443，不自动修改 REALITY SNI、密钥、Xray 配置或 nginx 规则。
+
+```bash
+myvps-next reality-domain-status  # 仅 DNS 解析 + TCP 443，不代表握手成功
+```
 
 ## 线上配置适配与兼容边界（2026-10-08 实测）
 
@@ -93,7 +103,7 @@ myvps-next chain-test
 
 现有 Cloudflare-WS 尚可使用；XHTTP 能否走 CDN 取决于客户端、Cloudflare、nginx、回源链路和 Xray 版本的匹配。**不会在未经测试时替换正在工作的 WS/443 配置**。后续应新增独立节点、对比故障率/吞吐/延迟，通过再迁移。
 
-## VPS 实测适配：独立 Google Drive AES-256 备份（v2.3.1-rc2）
+## VPS 实测适配：独立 Google Drive AES-256 备份（v2.3.1-rc3）
 
 2026-10-08 已核实：Debian 12 / 1 vCPU / 960MiB；REALITY、nginx、SOCKS 链式出口正常。博客目录约 36MB，使用 SQLite `blog.db`。两个 Google Drive 远端中，第 2 个可读取云端 `VPS-Backups`；旧备份最后更新于 2026-06-09。
 
