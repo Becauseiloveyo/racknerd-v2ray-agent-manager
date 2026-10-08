@@ -1,4 +1,4 @@
-# MyVPS（自有管理器）— v2.3.0-rc1
+# MyVPS（自有管理器）— v2.3.1-rc2
 
 这是 RackNerd / Debian VPS 的**非破坏性维护脚本**。目标是对**已稳定运行的 RackNerd VPS**进行兼容维护。当前不迁移生产 REALITY、住宅 SOCKS 链式出站或 Cloudflare WS；保留线上三个旧管理器并提供统一只读巡检和备份入口。
 
@@ -42,6 +42,18 @@ bash my_vps_manager.sh doctor
 | 博客 `moyan-blog` | PM2 online、SQLite `blog.db` | 保持现有数据，备份辅助脚本单独维护 |
 | Debian 12 / 1 vCPU / 960MiB | 资源紧凑 | 不自动引入 Docker/3X-UI/新面板 |
 
+### XHTTP（2026-10-08 实测）
+
+已在生产 VPS 并行部署 `myvps-xhttp.service`：本机 Xray 监听 `127.0.0.1:18081`，nginx 将 `cf.gooffu.tech` 的随机 XHTTP 路径转发给 Xray；TLS 由现有 nginx 承担，REALITY 与 CF-WS 原配置保留。Cloudflare 公网路径通过临时 Xray 客户端成功访问 HTTPS，返回 HTTP 200。
+
+XHTTP UUID、路径和客户端连接参数仅保存在 VPS 的 `/etc/myvps/xhttp/client-info.json`（权限 `600`），**没有写入 GitHub 或 Actions 日志**。可以在自己的 SSH 交互式终端运行 `myvps-next xhttp-client` 查看；不要公开该内容。新增命令 `myvps-next xhttp-status` 仅输出脱敏状态。
+
+### 自动备份健康监测
+
+新增 `myvps_backup_watch.py`：每次核对两个 systemd 定时器、上次执行结果和 Google Drive 新备份时间。任一类备份超过 36 小时未更新，会记录 `BACKUP_ALERT` 并返回非零退出状态。
+
+监测日志目前仅保留在 VPS 的 systemd journal 中，**不等于已经向手机、邮箱或 GitHub 发送通知**。可在确定接收渠道后进一步接入外发告警。
+
 ### 新增只读命令
 
 ```bash
@@ -81,7 +93,7 @@ myvps-next chain-test
 
 现有 Cloudflare-WS 尚可使用；XHTTP 能否走 CDN 取决于客户端、Cloudflare、nginx、回源链路和 Xray 版本的匹配。**不会在未经测试时替换正在工作的 WS/443 配置**。后续应新增独立节点、对比故障率/吞吐/延迟，通过再迁移。
 
-## VPS 实测适配：独立 Google Drive AES-256 备份（v2.3.0-rc1）
+## VPS 实测适配：独立 Google Drive AES-256 备份（v2.3.1-rc2）
 
 2026-10-08 已核实：Debian 12 / 1 vCPU / 960MiB；REALITY、nginx、SOCKS 链式出口正常。博客目录约 36MB，使用 SQLite `blog.db`。两个 Google Drive 远端中，第 2 个可读取云端 `VPS-Backups`；旧备份最后更新于 2026-06-09。
 
