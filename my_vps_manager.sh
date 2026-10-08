@@ -51,6 +51,18 @@ doctor() {
     XRAY_LOCATION_ASSET=/opt/myvps/xray/assets "$BIN" run -test -config "$CONF" \
       && msg "Owned Xray config: PASS" || msg "Owned Xray config: FAIL"
   fi
+  if [[ -f /etc/xray-racknerd-443/config.json ]]; then
+    local legacy_bin=""
+    if [[ -x /usr/local/bin/xray ]]; then legacy_bin="/usr/local/bin/xray"
+    elif command -v xray >/dev/null 2>&1; then legacy_bin=$(command -v xray); fi
+    if [[ -n "$legacy_bin" ]]; then
+      msg "Validating existing /etc/xray-racknerd-443/config.json (read-only)"
+      "$legacy_bin" run -test -config /etc/xray-racknerd-443/config.json \
+        && msg "Existing REALITY config: PASS" || msg "Existing REALITY config: FAIL"
+    else
+      msg "Existing REALITY config found, but no old Xray binary found for validation."
+    fi
+  fi
   if command -v nginx >/dev/null 2>&1; then
     msg "Checking nginx syntax (read-only)"
     nginx -t 2>&1 || true
@@ -347,7 +359,43 @@ Safety: No automatic DNS, UFW, nginx, 443, legacy Xray, PM2, or Cloudflare chang
 XHTTP requires separately tested server/client/CDN integration, not automatic migration.
 USAGE
 }
-case "${1:-status}" in
+menu() {
+  if [[ ! -t 0 ]]; then status; return; fi
+  cat <<'MENU'
+============ MyVPS v2.2 RC ============
+1  只读状态与端口
+2  只读诊断（含旧 REALITY / nginx）
+3  安装官方校验版 Xray（独立）
+4  初始化本机 REALITY 测试节点
+5  启动自有测试节点
+6  VPS 加密备份到 Google Drive
+7  博客独立加密备份
+8  初始化加密备份口令
+9  安装每周备份定时器
+10 更新管理脚本（防降级）
+0  退出
+=======================================
+MENU
+  local choice
+  read -r -p "请选择: " choice
+  case "$choice" in
+    1) status ;;
+    2) doctor ;;
+    3) xray_install ;;
+    4) reality_init ;;
+    5) xray_start ;;
+    6) backup_run vps ;;
+    7) backup_run blog ;;
+    8) backup_init ;;
+    9) install_timers ;;
+    10) self_update ;;
+    0) return ;;
+    *) msg "Invalid option"; return 2 ;;
+  esac
+}
+
+case "${1:-}" in
+  "") menu ;;
   status) status ;;
   doctor) doctor ;;
   deps-install) deps_install ;;
