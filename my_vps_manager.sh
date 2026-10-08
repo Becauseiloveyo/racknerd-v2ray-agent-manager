@@ -101,7 +101,7 @@ self_update() {
   bash -n "$TMP_DIR/my_vps_manager.sh" || die "Downloaded script failed syntax check."
   grep -q '^# Self-owned VPS manager:' "$TMP_DIR/my_vps_manager.sh" \
     || die "Refusing to install legacy non-owned launcher."
-  if grep -Eq 'mack-a/v2ray-agent|vasma' "$TMP_DIR/my_vps_manager.sh"; then
+  if grep -Eq '^[[:space:]]*UPSTREAM=|^[[:space:]]*vasma([[:space:]]|$)' "$TMP_DIR/my_vps_manager.sh"; then
     die "Downloaded script references forbidden legacy installer."
   fi
   local remote_version major minor
