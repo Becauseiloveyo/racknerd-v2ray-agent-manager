@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 umask 077
 
-VERSION="2.3.1-rc2"
+VERSION="2.3.1-rc3"
 REPO_RAW="https://raw.githubusercontent.com/Becauseiloveyo/racknerd-v2ray-agent-manager/main" # RC self-update intentionally disabled
 SELF="/opt/myvps/bin/my_vps_manager.sh"
 BIN="/opt/myvps/xray/xray"
@@ -61,6 +61,7 @@ status() {
   fi
 }
 chain_status() { runtime_helper status; }
+reality_domain_status() { runtime_helper reality-domain-status; }
 chain_test() { runtime_helper chain-test; }
 backup_status() { runtime_helper backup-status; }
 xhttp_status() { runtime_helper xhttp-status; }
@@ -288,9 +289,10 @@ install_timers() { backup_helper timers; }
 
 usage() {
   cat <<'USAGE'
-myvps-next v2.3.1-rc2 — live-VPS-aware, non-destructive manager
+myvps-next v2.3.1-rc3 — live-VPS-aware, non-destructive manager
   status          Read-only live nginx/REALITY/SOCKS/backup status (default)
   chain-test      End-to-end SOCKS5 authenticated HTTPS test (no credentials printed)
+  reality-domain-status   Check 2b.gooffu.tech DNS and TCP 443 (NOT REALITY handshake)
   backup-status   Check daily timers, cloud backup ages and recent success
   backup-watch    Test backup freshness (36h), exit nonzero on failures
   xhttp-status    Check isolated XHTTP service (no secrets)
@@ -341,6 +343,7 @@ menu() {
 17 检查 XHTTP 状态
 18 检查云端备份健康告警
 19 显示 XHTTP 客户端参数（仅本机终端）
+20 检查 REALITY 连接域名 2b.gooffu.tech
 0  退出
 =======================================
 MENU
@@ -366,6 +369,7 @@ MENU
     17) xhttp_status ;;
     18) backup_watch ;;
     19) xhttp_client ;;
+    20) reality_domain_status ;;
     0) return ;;
     *) msg "Invalid option"; return 2 ;;
   esac
@@ -377,6 +381,7 @@ case "${1:-}" in
   doctor) doctor ;;
   chain-status) chain_status ;;
   chain-test) chain_test ;;
+  reality-domain-status) reality_domain_status ;;
   backup-status) backup_status ;;
   backup-watch) backup_watch ;;
   xhttp-status) xhttp_status ;;
