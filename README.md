@@ -1,125 +1,85 @@
-# 我的 VPS 一键管理脚本
+# MyVPS（自有管理器）— v2.2.0-rc1
 
-这个仓库以后主要维护一个脚本：
+这是 RackNerd / Debian VPS 的**非破坏性维护脚本**。目标是逐步迁移到自有 Xray-core 管理，不再调用 `mack-a/v2ray-agent` 的安装菜单。
 
-```text
-my_vps_manager.sh
-```
+> **当前为独立分支上的候选版本（RC）**，尚未部署到你的 VPS，**也未进入 main**。实际运行版本及线上 nginx/REALITY 配置仍需在 VPS 上单独核验。
 
-它是给我自己的 RackNerd VPS 定制的，不是 v2ray-agent 官方项目，也不是 mack-a 原版脚本。
+## 核心规则
 
-底层节点安装仍然调用 mack-a/v2ray-agent 官方脚本；这个仓库只做入口、初始化、检测、备份、排查和客户端提示。
+- **不重装系统、不自动清理历史组件**。保留 blog / nginx / PM2 / AdGuardHome / 现有 Cloudflare WebSocket / REALITY 配置。
+- **不自动修改 443、nginx SNI、UFW、防火墙、DNS、SSH、证书或已有 Xray systemd 服务**。
+- 自有 Xray 的独立二进制路径：`/opt/myvps/xray/xray`。
+- 新建测试实例：`127.0.0.1:15594`，服务名 `myvps-xray.service`。必须手动启用；**不会自动并入 nginx SNI 443**。
+- 任何公开新节点、Cloudflare XHTTP 或 443 切换必须另行测试和评审。
+- 管理脚本只有明确执行相应子命令并确认才会修改系统；默认 `status` 只读。
 
-## 一行运行
+## 候选分支安全检查（不要直接在生产环境一键运行远程脚本）
 
-```bash
-bash <(curl -Ls https://raw.githubusercontent.com/Becauseiloveyo/racknerd-v2ray-agent-manager/main/my_vps_manager.sh)
-```
-
-## 以后打开
-
-第一次运行后，菜单里选：
-
-```text
-9. 更新本脚本
-```
-
-之后可以直接输入：
+从本分支下载到本地审查；**不要直接在现有 VPS 上执行**，先在测试机验证。
 
 ```bash
-myvps
+curl -fL -o my_vps_manager.sh \
+  https://raw.githubusercontent.com/Becauseiloveyo/racknerd-v2ray-agent-manager/maintenance/v2.2.0-owned-safe/my_vps_manager.sh
+bash -n my_vps_manager.sh
+bash my_vps_manager.sh help
+bash my_vps_manager.sh status
+bash my_vps_manager.sh doctor
 ```
 
-## 菜单功能
+正式部署前，先制作完整快照、保存 nginx stream 配置和 Xray 密钥。仅在明确准备好之后，再执行 `self-install`、`xray-install` 或 `reality-init`。
 
-只保留实用功能：
+## 命令清单
 
-```text
-1. 首次准备       装工具、修 DNS/时间、防火墙、BBR
-2. 安装/管理节点  打开 v2ray-agent，上游菜单只用来装节点
-3. 服务和端口     看 443/8443/2053/15593 和核心服务
-4. 备份配置       备份节点、Xray、sing-box、nginx
-5. AI 检测        看 GPT/Grok 相关出口状态
-6. 影视检测       看常见媒体平台出口状态
-7. 客户端建议     v2rayN/v2rayNG 专用设置
-8. 查看日志       出问题先看这里
-9. 更新本脚本     以后只维护这个脚本
-0. 退出
-```
+| 命令 | 功能 | 是否修改 |
+|---|---|---|
+| `status` | 系统、端口和服务状态 | 否 |
+| `doctor` | nginx -t 与自有 Xray 配置验证 | 否 |
+| `deps-install` | apt 安装依赖 | 是，需要确认 |
+| `self-install` | 安装管理器及 `myvps` 命令 | 是，需要确认 |
+| `self-update` | 从 main 获取并验证管理器（不得降级） | 是，需要确认 |
+| `xray-install` | 从 XTLS 官方 release 下载并比对 SHA-256，安装隔离的二进制 | 是，需要确认 |
+| `reality-init` | 生成 localhost 15594 的独立 REALITY 配置及停止状态的 systemd 单元 | 是，需要确认 |
+| `xray-start` | 仅启动 `myvps-xray.service` | 是，需要确认 |
+| `backup-init` | 初始化备份加密口令 | 是，需要确认 |
+| `backup-vps` | AES-256 加密 VPS 文件级归档并上传 | 是 |
+| `backup-blog` | 单独加密备份 `/root/my-blog` 及其相关配置 | 是 |
+| `backup-timers` | 安装每周独立备份 timer | 是，需要确认 |
 
-## 推荐安装方式
+### 为什么没有直接提供 XHTTP 一键切换
 
-重装 Debian 12 后，先运行：
+现有 Cloudflare-WS 尚可使用；XHTTP 能否走 CDN 取决于客户端、Cloudflare、nginx、回源链路和 Xray 版本的匹配。**不会在未经测试时替换正在工作的 WS/443 配置**。后续应新增独立节点、对比故障率/吞吐/延迟，通过再迁移。
 
+## 加密备份：Google Drive（VPS 与博客分开）
+
+支持已配置的 rclone 远端 `ggdrive:`，若不存在则使用 `gdrive:`；可通过 `MYVPS_BACKUP_REMOTE` 指定其他现有远端。备份**先在本地经 GnuPG AES-256 加密，再上传**，即使目标 remote 是普通 Google Drive 也不会上传明文归档。
+
+- VPS 文件：`VPS-Backups/racknerd/full/`
+- 博客文件：`VPS-Backups/racknerd/blog/`
+- VPS 归档包含 `/etc`、`/root`、`/opt`、`/var/www`、`/usr/local/etc`（仅存在路径；排除 cache/node_modules/.git）。
+- 博客归档包含 `/root/my-blog`、`/root/.pm2`、`/etc/nginx`（仅存在路径）。
+- 备份密钥在 `/etc/myvps/backup.pass`，权限 600。**务必另存离线恢复副本**，不要提交 GitHub、聊天或明文云盘。
+- 定时任务需要显式执行 `backup-timers`，每周日以 VPS 本地时区 02:00（VPS）和 03:00（blog）运行。
+
+> 文件级备份不等于整机磁盘镜像，不保证数据库的一致性；实际 MySQL/PostgreSQL 数据库应有独立的事务一致备份。执行备份后必须实测解密与恢复。云备份运行依赖 root 环境可以使用的 rclone 配置及授权。
+
+离线恢复思路（**仅在隔离测试机执行**）：
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/Becauseiloveyo/racknerd-v2ray-agent-manager/main/my_vps_manager.sh)
+gpg --batch --pinentry-mode loopback --passphrase-file /path/to/offline/backup.pass \
+  --decrypt -o restored.tar.gz encrypted-backup.tar.gz.gpg
+tar -tzf restored.tar.gz | head
 ```
 
-然后按顺序：
+## 回滚边界
 
-```text
-1. 首次准备
-2. 安装/管理节点
-```
+- `self-update` 更新前保留 `/root/my_vps_manager.sh.previous`，并且不会触碰正在运行的服务。
+- `xray-install` 更新前保留 `/opt/myvps/xray/xray.previous`，**不会自动重启**已有/新建服务。
+- REALITY 初始化绝不覆盖已有的 `/etc/myvps/xray/config.json`，不创建对外监听和防火墙规则。
+- 对服务器部署之前务必保留**提供商快照**；脚本提供的是局部回滚措施，不等于生产环境一键全量回滚。
 
-进入 v2ray-agent 后，建议只安装一个主节点：
+## 安全与隐私
 
-```text
-协议：VLESS Reality Vision
-端口：443 优先
-备用端口：8443 / 2053 / 15593
-flow：xtls-rprx-vision
-fingerprint：chrome
-Mux：关闭
-```
+绝对不要提交 UUID、REALITY PrivateKey、Short ID、订阅地址、证书、rclone 配置、备份口令；对外发布诊断日志前请人工检查。新实例的凭据仅保存在 root 控制的 VPS 配置内。
 
-## v2rayN / v2rayNG 建议
+## 开发验收
 
-```text
-先用全局模式测试
-Mux 关闭
-IPv6 关闭或优先 IPv4
-DNS 尽量走节点，不要依赖运营商 DNS
-Reality fingerprint 用 chrome
-```
-
-如果 v2rayN 测速显示 -1 ms，不要直接判断 VPS 坏了，先看：
-
-```text
-3. 服务和端口
-8. 查看日志
-```
-
-## 说明
-
-这个脚本不承诺任何 AI 或影视平台 100% 解锁。
-
-平台是否可用主要取决于：
-
-```text
-VPS IP 信誉
-ASN / 机房类型
-账号地区
-客户端 DNS
-运营商线路
-平台风控
-```
-
-脚本能做的是提高稳定性、减少常见配置问题、让排查更清楚。
-
-## 安全提醒
-
-不要公开这些内容：
-
-```text
-UUID
-PrivateKey
-ShortId
-PublicKey
-节点链接
-订阅链接
-证书
-备份压缩包
-```
-
-如果截图或聊天里泄露过节点参数，建议进 v2ray-agent 重置用户后重新导入客户端。
+仓库内 `tests/smoke.sh` 和 GitHub Actions 执行 Bash 语法、帮助菜单及只读状态检查。候选分支在 VPS 实测、备份恢复验证及 nginx/Reality 连通性验证前不得合并为正式发布。
