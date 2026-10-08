@@ -5,7 +5,7 @@ umask 077
 KEY=/etc/myvps/backup.pass
 REMOTE=/etc/myvps/backup.remote
 SELF=/opt/myvps/backup/myvps_backup.sh
-BASE=VPS-Backups/racknerd
+BASE=VPS-Backups
 TMP=''
 trap '[[ -z "$TMP" || ! -d "$TMP" ]] || rm -rf -- "$TMP"' EXIT
 msg() { printf '[backup] %s\n' "$*"; }
@@ -46,8 +46,8 @@ verify() {
 upload() {
   local file=$1 dest=$2 name
   name=$(basename "$file")
-  rclone copyto "$file" "$dest/$name" --retries 3 --low-level-retries 5 --transfers 1
-  rclone check "$(dirname "$file")" "$dest" --one-way --include "$name" --checkers 1 >/dev/null || die 'Cloud checksum mismatch'
+  rclone copyto "$file" "$dest/$name" --retries 5 --low-level-retries 10 --transfers 1 --tpslimit 1 --tpslimit-burst 1
+  rclone check "$(dirname "$file")" "$dest" --one-way --include "$name" --checkers 1 --tpslimit 1 --tpslimit-burst 1 >/dev/null || die 'Cloud checksum mismatch'
   msg "Remote checksum PASS: $name"
 }
 probe() {
@@ -59,7 +59,7 @@ probe() {
   name="probe-$nonce.gpg"
   printf 'backup-test-%s\n' "$nonce" > "$TMP/plain"
   gpg --quiet --batch --yes --pinentry-mode loopback --passphrase-file "$KEY" -c --cipher-algo AES256 -o "$TMP/$name" "$TMP/plain"
-  dest="$r$BASE/.health"
+  dest="$r$BASE"
   upload "$TMP/$name" "$dest"
   rclone deletefile "$dest/$name" || die 'Probe deletion failed'
   msg 'Encrypted upload, cloud checksum and own probe cleanup: PASS'
@@ -114,7 +114,7 @@ backup() {
   temp
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
   name="myvps-$kind-$stamp.tar.gz.gpg"
-  dest="$r$BASE/$kind"
+  dest="$r$BASE"
   if [[ "$kind" == blog ]]; then snapshot_blog; else stage_config; fi
   tar -C "$TMP/stage" -czf - . | gpg --quiet --batch --yes --pinentry-mode loopback --passphrase-file "$KEY" -c --cipher-algo AES256 -o "$TMP/$name"
   chmod 600 "$TMP/$name"
@@ -127,7 +127,7 @@ restore() {
   local kind=$1 r prefix file
   [[ "$kind" == config || "$kind" == blog ]] || die 'Wrong kind'
   r=$(remote)
-  prefix="$r$BASE/$kind"
+  prefix="$r$BASE"
   file=$(rclone lsf "$prefix" --files-only --max-depth 1 | grep -E "^myvps-$kind-[0-9]{8}T[0-9]{6}Z.tar.gz.gpg$" | sort | tail -1)
   [[ -n "$file" ]] || die 'No cloud backup found'
   temp
