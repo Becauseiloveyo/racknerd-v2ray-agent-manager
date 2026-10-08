@@ -1,8 +1,8 @@
-# MyVPS（自有管理器）— v2.2.1-rc2
+# MyVPS（自有管理器）— v2.3.0-rc1
 
-这是 RackNerd / Debian VPS 的**非破坏性维护脚本**。目标是逐步迁移到自有 Xray-core 管理，不再调用 `mack-a/v2ray-agent` 的安装菜单。
+这是 RackNerd / Debian VPS 的**非破坏性维护脚本**。目标是对**已稳定运行的 RackNerd VPS**进行兼容维护。当前不迁移生产 REALITY、住宅 SOCKS 链式出站或 Cloudflare WS；保留线上三个旧管理器并提供统一只读巡检和备份入口。
 
-> **当前为独立分支上的候选版本（RC）**，尚未部署到你的 VPS，**也未进入 main**。实际运行版本及线上 nginx/REALITY 配置仍需在 VPS 上单独核验。
+> **当前为维护分支候选版本（RC）**，未合并 main。线上管理脚本 `/root/my_vps_manager.sh` 保持 v1.2.0，不覆盖。新备份辅助工具已经独立部署；新版综合管理器通过 `/usr/local/bin/myvps-next` 并行安装（不会劫持原 `myvps`）。
 
 ## 核心规则
 
@@ -15,7 +15,7 @@
 
 ## 候选分支安全检查（不要直接在生产环境一键运行远程脚本）
 
-从本分支下载到本地审查；**不要直接在现有 VPS 上执行**，先在测试机验证。
+从本分支下载到本地审查，新版需要一起下载 `my_vps_manager.sh` 与 `myvps_runtime.py`。**不要一键覆盖线上 `/root/my_vps_manager.sh` 或现有 `myvps`**。
 
 ```bash
 curl -fL -o my_vps_manager.sh \
@@ -26,17 +26,47 @@ bash my_vps_manager.sh status
 bash my_vps_manager.sh doctor
 ```
 
-正式部署前，先制作完整快照、保存 nginx stream 配置和 Xray 密钥。仅在明确准备好之后，再执行 `self-install`、`xray-install` 或 `reality-init`。
+在正式部署之前保留完整快照、nginx stream 配置和 Xray 密钥；`self-install` 只在 `/opt/myvps/bin/` 安装并行测试版，不覆盖现有管理器。额外的 Xray 实例属于可选实验，不应取代正在运行的系统。
+
+## 线上配置适配与兼容边界（2026-10-08 实测）
+
+| 当前生产组件 | 实测状态 | 新管理器行为 |
+|---|---|---|
+| `/root/my_vps_manager.sh` v1.2.0 | 在线原管理器 | 保持；`legacy-main` 可从交互式会话进入 |
+| `/root/my_vps_exit_manager.sh` v1.0.1 | 原生/WARP/住宅出口菜单 | 保持；`legacy-exit` 从交互式会话进入 |
+| `/root/my_vps_cf_ws_manager.sh` v1.0.0 | CF-WS 菜单 | 保持；`legacy-cf` 从交互式会话进入 |
+| `xray-racknerd-443.service` | active，VLESS+TCP+REALITY | 只读校验；不改 443、私钥、UUID |
+| SOCKS 出站 `res-socks` | 已配置且实际 HTTPS 测试通过 | `status` 检测配置；`chain-test` 可重新验证，输出不含账号和 IP |
+| nginx stream SNI 分流 | 443 由 nginx 监听 | 不修改 |
+| Google Drive AES-256 自动备份 | config/blog 每日定时器启用 | `backup-status` 读取云端备份新鲜度与最近服务结果 |
+| 博客 `moyan-blog` | PM2 online、SQLite `blog.db` | 保持现有数据，备份辅助脚本单独维护 |
+| Debian 12 / 1 vCPU / 960MiB | 资源紧凑 | 不自动引入 Docker/3X-UI/新面板 |
+
+### 新增只读命令
+
+```bash
+myvps-next status
+myvps-next doctor
+myvps-next backup-status
+myvps-next chain-test
+```
+
+需要打开已有菜单时，只在人工交互式终端运行 `myvps-next legacy-main`、`myvps-next legacy-exit` 或 `myvps-next legacy-cf`。新版本候选阶段 `self-update` **禁用**，防止从尚未更新的 `main` 意外覆盖。
+
+`status` 和 `backup-status` 不打印 SOCKS 账号密码、真实上游地址或 REALITY 密钥；`chain-test` 会使用现有 SOCKS 凭据进行短暂 HTTPS 请求，但不打印凭据。
 
 ## 命令清单
 
 | 命令 | 功能 | 是否修改 |
 |---|---|---|
-| `status` | 系统、端口和服务状态 | 否 |
+| `status` | 生产服务、路由、备份定时器的脱敏状态 | 否 |
+| `chain-test` | 住宅 SOCKS 出站、TLS 与 HTTP 端到端测试 | 否（会建立网络连接） |
+| `backup-status` | 云端归档新鲜度、最近执行结果 | 否 |
+| `legacy-main` / `legacy-exit` / `legacy-cf` | 显式打开现有菜单 | 取决于人工菜单操作 |
 | `doctor` | nginx -t 与自有 Xray 配置验证 | 否 |
 | `deps-install` | apt 安装依赖 | 是，需要确认 |
-| `self-install` | 安装管理器及 `myvps` 命令 | 是，需要确认 |
-| `self-update` | 从 main 获取并验证管理器（不得降级） | 是，需要确认 |
+| `self-install` | 并行安装为 `myvps-next`，不替换原 `myvps` | 是，需要确认 |
+| `self-update` | 候选版禁用，避免从 main 错误覆盖 | 否 |
 | `xray-install` | 从 XTLS 官方 release 下载并比对 SHA-256，安装隔离的二进制 | 是，需要确认 |
 | `reality-init` | 生成 localhost 15594 的独立 REALITY 配置及停止状态的 systemd 单元 | 是，需要确认 |
 | `xray-start` | 仅启动 `myvps-xray.service` | 是，需要确认 |
@@ -49,7 +79,7 @@ bash my_vps_manager.sh doctor
 
 现有 Cloudflare-WS 尚可使用；XHTTP 能否走 CDN 取决于客户端、Cloudflare、nginx、回源链路和 Xray 版本的匹配。**不会在未经测试时替换正在工作的 WS/443 配置**。后续应新增独立节点、对比故障率/吞吐/延迟，通过再迁移。
 
-## VPS 实测适配：独立 Google Drive AES-256 备份（v2.2.1-rc2）
+## VPS 实测适配：独立 Google Drive AES-256 备份（v2.3.0-rc1）
 
 2026-10-08 已核实：Debian 12 / 1 vCPU / 960MiB；REALITY、nginx、SOCKS 链式出口正常。博客目录约 36MB，使用 SQLite `blog.db`。两个 Google Drive 远端中，第 2 个可读取云端 `VPS-Backups`；旧备份最后更新于 2026-06-09。
 
