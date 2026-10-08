@@ -72,7 +72,7 @@ def chain_config_summary(data):
 
 
 def status():
-    print("manager_release=2.3.0-rc1")
+    print("manager_release=2.3.1-rc2")
     osr = Path("/etc/os-release")
     if osr.exists():
         m = re.search(r'^PRETTY_NAME=(.+)', osr.read_text(), re.M)
