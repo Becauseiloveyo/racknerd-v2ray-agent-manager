@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 umask 077
 
-VERSION="2.3.0-rc1"
+VERSION="2.3.1-rc2"
 REPO_RAW="https://raw.githubusercontent.com/Becauseiloveyo/racknerd-v2ray-agent-manager/main" # RC self-update intentionally disabled
 SELF="/opt/myvps/bin/my_vps_manager.sh"
 BIN="/opt/myvps/xray/xray"
@@ -63,6 +63,20 @@ status() {
 chain_status() { runtime_helper status; }
 chain_test() { runtime_helper chain-test; }
 backup_status() { runtime_helper backup-status; }
+xhttp_status() { runtime_helper xhttp-status; }
+xhttp_client() {
+  require_root
+  [[ -t 1 ]] || die "XHTTP client credentials are only shown in your own interactive terminal."
+  local info="/etc/myvps/xhttp/client-info.json"
+  [[ -r "$info" ]] || die "XHTTP client info not found."
+  cat "$info"
+}
+backup_watch() {
+  require_root
+  local watcher="/opt/myvps/bin/myvps_backup_watch.py"
+  [[ -r "$watcher" ]] || die "Backup watcher not installed."
+  python3 "$watcher" "$@"
+}
 legacy_menu() {
   require_root
   [[ -t 0 ]] || die "Legacy menus require an interactive terminal."
@@ -274,10 +288,13 @@ install_timers() { backup_helper timers; }
 
 usage() {
   cat <<'USAGE'
-myvps-next v2.3.0-rc1 — live-VPS-aware, non-destructive manager
+myvps-next v2.3.1-rc2 — live-VPS-aware, non-destructive manager
   status          Read-only live nginx/REALITY/SOCKS/backup status (default)
   chain-test      End-to-end SOCKS5 authenticated HTTPS test (no credentials printed)
   backup-status   Check daily timers, cloud backup ages and recent success
+  backup-watch    Test backup freshness (36h), exit nonzero on failures
+  xhttp-status    Check isolated XHTTP service (no secrets)
+  xhttp-client    Show XHTTP client info in your own interactive terminal
   legacy-main     Open existing v1.2.0 VPS manager (interactive)
   legacy-exit     Open existing exit/chain manager (interactive)
   legacy-cf       Open existing CF-WS manager (interactive)
@@ -321,6 +338,9 @@ menu() {
 14 进入旧版 VPS 管理菜单
 15 进入住宅/WARP 出口管理
 16 进入 CF-WS 管理菜单
+17 检查 XHTTP 状态
+18 检查云端备份健康告警
+19 显示 XHTTP 客户端参数（仅本机终端）
 0  退出
 =======================================
 MENU
@@ -343,6 +363,9 @@ MENU
     14) legacy_menu main ;;
     15) legacy_menu exit ;;
     16) legacy_menu cf ;;
+    17) xhttp_status ;;
+    18) backup_watch ;;
+    19) xhttp_client ;;
     0) return ;;
     *) msg "Invalid option"; return 2 ;;
   esac
@@ -355,6 +378,9 @@ case "${1:-}" in
   chain-status) chain_status ;;
   chain-test) chain_test ;;
   backup-status) backup_status ;;
+  backup-watch) backup_watch ;;
+  xhttp-status) xhttp_status ;;
+  xhttp-client) xhttp_client ;;
   legacy-main) legacy_menu main ;;
   legacy-exit) legacy_menu exit ;;
   legacy-cf) legacy_menu cf ;;
