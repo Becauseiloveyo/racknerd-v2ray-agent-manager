@@ -62,7 +62,7 @@ bash my_vps_manager.sh doctor
 - `restore-test config` / `restore-test blog`：从云端下载最新文件并解密、校验 tar 内容，不覆盖线上文件。
 - `timers`：北京时间每日 02:00 备份系统配置、02:30 备份博客，通过 systemd timer 自动执行。
 
-备份加密方式 GPG AES256，目标 `VPS-Backups/racknerd/config/` 和 `VPS-Backups/racknerd/blog/`。上传采用 rclone，随后进行云端文件校验和比对。所有操作默认不触及旧目录对象。
+备份加密方式 GPG AES256，目标为**已经存在的** `VPS-Backups/`；通过 `myvps-config-` 与 `myvps-blog-` 文件名前缀区分两类备份，以减少 Google Drive API 的目录创建请求。上传采用 rclone，随后进行云端文件校验和比对。所有操作默认不触及旧目录对象。
 
 运行方式：
 ```bash
