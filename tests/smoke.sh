@@ -4,8 +4,10 @@ cd "$(dirname "$0")/.."
 script="my_vps_manager.sh"
 
 bash -n "$script"
+bash -n myvps_backup.sh
+grep -q "restore-test" myvps_backup.sh
 bash "$script" help > /tmp/myvps-help.txt
-grep -q '2.2.0-rc1' /tmp/myvps-help.txt
+grep -q '2.2.1-rc2' /tmp/myvps-help.txt
 grep -q 'reality-init' /tmp/myvps-help.txt
 
 # No privileged mutations should occur in read-only inspection.
