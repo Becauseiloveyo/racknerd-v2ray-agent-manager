@@ -3,9 +3,9 @@
 set -Eeuo pipefail
 umask 077
 
-VERSION="2.2.1-rc2"
-REPO_RAW="https://raw.githubusercontent.com/Becauseiloveyo/racknerd-v2ray-agent-manager/main"
-SELF="/root/my_vps_manager.sh"
+VERSION="2.3.0-rc1"
+REPO_RAW="https://raw.githubusercontent.com/Becauseiloveyo/racknerd-v2ray-agent-manager/main" # RC self-update intentionally disabled
+SELF="/opt/myvps/bin/my_vps_manager.sh"
 BIN="/opt/myvps/xray/xray"
 CONF="/etc/myvps/xray/config.json"
 SERVICE="myvps-xray.service"
@@ -25,8 +25,8 @@ confirm() {
 }
 make_tmp() { TMP_DIR=$(mktemp -d /tmp/myvps.XXXXXXXX); chmod 700 "$TMP_DIR"; }
 
-status() {
-  msg "Manager $VERSION; read-only status"
+basic_status() {
+  msg "Manager $VERSION; basic read-only status"
   printf 'OS: '; grep '^PRETTY_NAME=' /etc/os-release 2>/dev/null || true
   printf 'Kernel: '; uname -r
   local service
@@ -42,6 +42,41 @@ status() {
   msg "Owned binary: $([[ -x "$BIN" ]] && echo installed || echo missing)"
   if [[ -x "$BIN" ]]; then "$BIN" version | head -n 2 || true; fi
   msg "Owned config: $([[ -f "$CONF" ]] && echo present || echo missing)"
+}
+
+runtime_helper() {
+  local helper="/opt/myvps/bin/myvps_runtime.py"
+  [[ -r "$helper" ]] || helper="$(cd "$(dirname "$0")" && pwd)/myvps_runtime.py"
+  [[ -f "$helper" ]] || die "Runtime helper missing: myvps_runtime.py"
+  need python3
+  python3 "$helper" "$@"
+}
+status() {
+  msg "MyVPS $VERSION — live existing services (read-only)"
+  if [[ -f /opt/myvps/bin/myvps_runtime.py || -f "$(dirname "$0")/myvps_runtime.py" ]]; then
+    runtime_helper status
+  else
+    basic_status
+    msg "Install the companion myvps_runtime.py for full live status."
+  fi
+}
+chain_status() { runtime_helper status; }
+chain_test() { runtime_helper chain-test; }
+backup_status() { runtime_helper backup-status; }
+legacy_menu() {
+  require_root
+  [[ -t 0 ]] || die "Legacy menus require an interactive terminal."
+  local which="$1" path
+  case "$which" in
+    main) path="/root/my_vps_manager.sh" ;;
+    exit) path="/root/my_vps_exit_manager.sh" ;;
+    cf) path="/root/my_vps_cf_ws_manager.sh" ;;
+    *) die "Unknown legacy menu." ;;
+  esac
+  [[ -f "$path" && -r "$path" ]] || die "Legacy script absent: $which"
+  [[ "$(readlink -f "$path")" != "$(readlink -f "$0")" ]] || die "Refusing to recurse into this manager."
+  msg "Opening installed legacy $which manager; production ownership remains unchanged."
+  /usr/bin/bash "$path"
 }
 
 doctor() {
@@ -81,42 +116,26 @@ deps_install() {
 
 self_install() {
   require_root
-  need bash
-  local source
+  local source helper source_dir
   source=$(readlink -f "$0")
-  [[ "$source" != "$SELF" ]] || { msg "Already installed at $SELF"; return; }
-  bash -n "$source" || die "Current script does not parse."
-  confirm "Install this exact script as $SELF and create /usr/local/bin/myvps?"
-  install -m 700 "$source" "$SELF"
-  ln -sfn "$SELF" /usr/local/bin/myvps
-  msg "Manager installed; services unchanged."
-}
-
-self_update() {
-  require_root
-  need curl
-  make_tmp
-  curl -fsSL --retry 3 --connect-timeout 10 --max-time 60 \
-    -o "$TMP_DIR/my_vps_manager.sh" "$REPO_RAW/my_vps_manager.sh"
-  bash -n "$TMP_DIR/my_vps_manager.sh" || die "Downloaded script failed syntax check."
-  grep -q '^# Self-owned VPS manager:' "$TMP_DIR/my_vps_manager.sh" \
-    || die "Refusing to install legacy non-owned launcher."
-  if grep -Eq '^[[:space:]]*UPSTREAM=|^[[:space:]]*vasma([[:space:]]|$)' "$TMP_DIR/my_vps_manager.sh"; then
-    die "Downloaded script references forbidden legacy installer."
-  fi
-  local remote_version major minor
-  remote_version=$(sed -n 's/^VERSION="\([^"]*\)".*/\1/p' "$TMP_DIR/my_vps_manager.sh" | head -n1)
-  [[ "$remote_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]] || die "Invalid remote version."
-  major=$(cut -d. -f1 <<< "$remote_version")
-  minor=$(cut -d. -f2 <<< "$remote_version")
-  (( major > 2 || (major == 2 && minor >= 2) )) || die "Refusing legacy main branch below v2.2."
-  msg "Available owned version: $remote_version"
-  confirm "Replace $SELF with validated main-branch script? .previous is kept."
-  [[ ! -f "$SELF" ]] || cp -a "$SELF" "$SELF.previous"
-  install -m 700 "$TMP_DIR/my_vps_manager.sh" "$SELF.next"
+  source_dir=$(dirname "$source")
+  helper="$source_dir/myvps_runtime.py"
+  [[ -f "$helper" ]] || die "Install requires myvps_runtime.py beside the manager."
+  need python3
+  bash -n "$source" || die "Bash syntax invalid."
+  python3 -m py_compile "$helper" || die "Python diagnostics syntax invalid."
+  confirm "Install parallel command myvps-next only? Existing /root/my_vps_manager.sh and myvps are kept."
+  install -d -m 755 /opt/myvps/bin
+  if [[ -f "$SELF" ]]; then cp -a "$SELF" "$SELF.previous"; fi
+  install -m 700 "$source" "$SELF.next"
+  install -m 700 "$helper" /opt/myvps/bin/myvps_runtime.py.next
   mv -f "$SELF.next" "$SELF"
-  ln -sfn "$SELF" /usr/local/bin/myvps
-  msg "Manager updated without restarting services."
+  mv -f /opt/myvps/bin/myvps_runtime.py.next /opt/myvps/bin/myvps_runtime.py
+  ln -sfn "$SELF" /usr/local/bin/myvps-next
+  msg "Installed myvps-next in parallel; live myvps and all network services unchanged."
+}
+self_update() {
+  die "RC update disabled: the published main branch is not the candidate. Review and install a pinned tested release; no changes made."
 }
 
 xray_install() {
@@ -255,12 +274,17 @@ install_timers() { backup_helper timers; }
 
 usage() {
   cat <<'USAGE'
-myvps v2.2.1-rc2 — self-owned, non-destructive VPS manager
-  status          Read-only status (default)
+myvps-next v2.3.0-rc1 — live-VPS-aware, non-destructive manager
+  status          Read-only live nginx/REALITY/SOCKS/backup status (default)
+  chain-test      End-to-end SOCKS5 authenticated HTTPS test (no credentials printed)
+  backup-status   Check daily timers, cloud backup ages and recent success
+  legacy-main     Open existing v1.2.0 VPS manager (interactive)
+  legacy-exit     Open existing exit/chain manager (interactive)
+  legacy-cf       Open existing CF-WS manager (interactive)
   doctor          Check owned Xray config and nginx syntax
   deps-install    Install prerequisites (confirmation required)
-  self-install    Install manager into /root + myvps symlink
-  self-update     Fetch syntax-checked main-branch manager
+  self-install    Install parallel myvps-next; preserve the existing myvps command
+  self-update     Disabled in release candidate to prevent main/RC mismatch
   xray-install    Install SHA256-verified official Xray binary separately
   reality-init    Generate local-only 15594 REALITY instance (no start)
   xray-start      Start ONLY owned myvps-xray service
@@ -289,8 +313,14 @@ menu() {
 6  VPS 加密备份到 Google Drive
 7  博客独立加密备份
 8  初始化加密备份口令
-9  安装每周备份定时器
-10 更新管理脚本（防降级）
+9  检查/安装每天备份定时器
+10 检查 GitHub 更新（候选版本禁用）
+11 查看当前链式代理配置
+12 测试 SOCKS5 链式出口
+13 查看云端备份日期
+14 进入旧版 VPS 管理菜单
+15 进入住宅/WARP 出口管理
+16 进入 CF-WS 管理菜单
 0  退出
 =======================================
 MENU
@@ -307,6 +337,12 @@ MENU
     8) backup_init ;;
     9) install_timers ;;
     10) self_update ;;
+    11) chain_status ;;
+    12) chain_test ;;
+    13) backup_status ;;
+    14) legacy_menu main ;;
+    15) legacy_menu exit ;;
+    16) legacy_menu cf ;;
     0) return ;;
     *) msg "Invalid option"; return 2 ;;
   esac
@@ -316,6 +352,12 @@ case "${1:-}" in
   "") menu ;;
   status) status ;;
   doctor) doctor ;;
+  chain-status) chain_status ;;
+  chain-test) chain_test ;;
+  backup-status) backup_status ;;
+  legacy-main) legacy_menu main ;;
+  legacy-exit) legacy_menu exit ;;
+  legacy-cf) legacy_menu cf ;;
   deps-install) deps_install ;;
   self-install) self_install ;;
   self-update) self_update ;;
