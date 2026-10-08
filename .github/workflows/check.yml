@@ -1,0 +1,17 @@
+name: MyVPS script checks
+on:
+  pull_request:
+  push:
+    branches:
+      - maintenance/**
+jobs:
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax, read-only smoke tests, and regression guards
+        run: bash tests/smoke.sh
+      - name: ShellCheck (errors)
+        run: |
+          shellcheck --severity=error my_vps_manager.sh myvps_backup.sh tests/smoke.sh
+          python3 -m py_compile myvps_runtime.py myvps_backup_watch.py

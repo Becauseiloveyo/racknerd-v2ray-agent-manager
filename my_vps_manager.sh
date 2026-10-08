@@ -1,348 +1,407 @@
 #!/usr/bin/env bash
+# Self-owned VPS manager: does not take over existing nginx/Xray/PM2.
 set -Eeuo pipefail
+umask 077
 
-VERSION="1.2.0"
-REPO="https://raw.githubusercontent.com/Becauseiloveyo/racknerd-v2ray-agent-manager/main"
-UPSTREAM="https://raw.githubusercontent.com/mack-a/v2ray-agent/master/install.sh"
-LOG="/var/log/my_vps_manager.log"
-SELF="/root/my_vps_manager.sh"
-BIN="/usr/local/bin/myvps"
-PORTS="22 80 443 8443 2053 15593"
-REPORT_DIR="/root/my-vps-reports"
-
-if [[ -t 1 ]]; then
-  R='\033[0;31m'; G='\033[0;32m'; Y='\033[1;33m'; B='\033[0;34m'; C='\033[0;36m'; W='\033[1m'; D='\033[2m'; N='\033[0m'
-else
-  R=''; G=''; Y=''; B=''; C=''; W=''; D=''; N=''
-fi
-
-log(){ mkdir -p "$(dirname "$LOG")" >/dev/null 2>&1 || true; echo -e "[$(date '+%F %T')] $*" | tee -a "$LOG"; }
-ok(){ log "${G}[OK]${N} $*"; }
-warn(){ log "${Y}[注意]${N} $*"; }
-err(){ log "${R}[错误]${N} $*"; }
-has(){ command -v "$1" >/dev/null 2>&1; }
-pause(){ read -rp "按回车返回..." _ || true; }
-need_root(){ [[ ${EUID:-0} -eq 0 ]] || { err "请用 root 运行"; exit 1; }; }
-dl(){ if has curl; then curl -fsSL --retry 3 --connect-timeout 10 --max-time 80 -o "$2" "$1"; else wget -q -O "$2" "$1"; fi; }
-
-header(){
-  clear
-  echo -e "${C}${W}╔══════════════════════════════════════╗${N}"
-  echo -e "${C}${W}║        我的 RackNerd VPS 管理        ║${N}"
-  echo -e "${C}${W}╚══════════════════════════════════════╝${N}"
-  echo -e "版本: $VERSION    主脚本: my_vps_manager.sh\n"
+VERSION="2.3.1-rc3"
+REPO_RAW="https://raw.githubusercontent.com/Becauseiloveyo/racknerd-v2ray-agent-manager/main" # RC self-update intentionally disabled
+SELF="/opt/myvps/bin/my_vps_manager.sh"
+BIN="/opt/myvps/xray/xray"
+CONF="/etc/myvps/xray/config.json"
+SERVICE="myvps-xray.service"
+BACKUP_KEY="/etc/myvps/backup.pass"
+TMP_DIR=""
+cleanup() { [[ -z "$TMP_DIR" || ! -d "$TMP_DIR" ]] || rm -rf -- "$TMP_DIR"; }
+trap cleanup EXIT
+msg() { printf '[myvps] %s\n' "$*"; }
+die() { printf '[myvps][ERROR] %s\n' "$*" >&2; exit 1; }
+require_root() { [[ "$EUID" -eq 0 ]] || die "Run as root."; }
+need() { command -v "$1" >/dev/null 2>&1 || die "Missing dependency: $1 (run deps-install explicitly)."; }
+confirm() {
+  [[ -t 0 ]] || die "Interactive confirmation required; no changes made."
+  local response
+  read -r -p "$1 [type YES]: " response
+  [[ "$response" == "YES" ]] || die "Cancelled."
 }
+make_tmp() { TMP_DIR=$(mktemp -d /tmp/myvps.XXXXXXXX); chmod 700 "$TMP_DIR"; }
 
-install_base(){
-  need_root
-  mkdir -p "$REPORT_DIR"
-  if has apt-get; then
-    apt-get update
-    DEBIAN_FRONTEND=noninteractive apt-get install -y curl wget ca-certificates jq ufw lsof iproute2 dnsutils cron tar unzip openssl fail2ban
-    systemctl enable --now cron >/dev/null 2>&1 || true
-  else
-    warn "当前系统不是 apt 系，脚本只做基础检查。推荐 Debian 12。"
-  fi
-  ok "基础工具完成"
-}
-
-fix_basic(){
-  need_root
-  if has timedatectl; then timedatectl set-ntp true || true; fi
-  cp -a /etc/resolv.conf "/etc/resolv.conf.bak.$(date +%F_%H%M%S)" 2>/dev/null || true
-  printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\nnameserver 9.9.9.9\n' >/etc/resolv.conf
-  if has ufw; then
-    for p in $PORTS; do ufw allow "$p/tcp" || true; done
-    ufw --force enable || true
-  fi
-  cat >/etc/sysctl.d/98-my-vps.conf <<'EOF'
-net.core.default_qdisc=fq
-net.ipv4.tcp_congestion_control=bbr
-net.ipv4.tcp_fastopen=3
-net.ipv4.tcp_mtu_probing=1
-EOF
-  sysctl --system >/dev/null || true
-  ok "DNS、时间、防火墙、BBR 已处理"
-}
-
-vps_info(){
-  echo "系统: $(grep -E '^PRETTY_NAME=' /etc/os-release 2>/dev/null | cut -d= -f2- | tr -d '"' || echo unknown)"
-  echo "内核: $(uname -r)"
-  echo "CPU: $(nproc) 核"
-  free -h || true
-  df -h / || true
-  echo
-  echo "IPv4: $(curl -4 -s --max-time 6 https://api.ipify.org || true)"
-  if has jq; then
-    curl -4 -s --max-time 8 https://ipinfo.io/json | jq -r '"地区: \(.country) \(.city)\nASN: \(.org)"' || true
-  else
-    curl -4 -s --max-time 8 https://ipinfo.io/json || true
-  fi
-}
-
-ports_status(){
-  echo "常用端口监听:"
-  ss -tulpen 2>/dev/null | grep -E ':(22|80|443|8443|2053|15593)\b' || echo "未看到常用节点端口监听"
-  echo
-  for s in xray sing-box nginx fail2ban; do
-    if systemctl list-unit-files 2>/dev/null | grep -q "^$s.service"; then
-      systemctl --no-pager --full status "$s" 2>/dev/null | sed -n '1,8p' || true
-      echo
+basic_status() {
+  msg "Manager $VERSION; basic read-only status"
+  printf 'OS: '; grep '^PRETTY_NAME=' /etc/os-release 2>/dev/null || true
+  printf 'Kernel: '; uname -r
+  local service
+  for service in nginx xray xray-racknerd-443 "$SERVICE" fail2ban; do
+    if command -v systemctl >/dev/null 2>&1; then
+      printf '%-24s %s\n' "$service" "$(systemctl is-active "$service" 2>/dev/null || true)"
     fi
   done
-}
-
-node_hint(){
-  echo "节点安装建议："
-  echo "- 主节点：VLESS Reality Vision"
-  echo "- 主端口：443"
-  echo "- 备用端口：8443 / 2053 / 15593"
-  echo "- flow：xtls-rprx-vision"
-  echo "- fingerprint：chrome"
-  echo "- Mux：关闭"
-  echo
-  if [[ -d /etc/v2ray-agent ]]; then
-    ok "检测到 /etc/v2ray-agent，说明系统里存在 v2ray-agent 配置目录。"
-  else
-    warn "未检测到 /etc/v2ray-agent。还没有安装，或不是 v2ray-agent 环境。"
+  if command -v ss >/dev/null 2>&1; then
+    msg "Listening sockets (443, 15593, 15594, 80)"
+    ss -lntup | grep -E '(:443|:15593|:15594|:80)[[:space:]]' || true
   fi
-  echo
-  echo "安全说明：本脚本不会直接打印 UUID、PrivateKey、ShortId 或节点链接。"
-  echo "需要查看/重置节点，请进：2. 安装/管理节点"
+  msg "Owned binary: $([[ -x "$BIN" ]] && echo installed || echo missing)"
+  if [[ -x "$BIN" ]]; then "$BIN" version | head -n 2 || true; fi
+  msg "Owned config: $([[ -f "$CONF" ]] && echo present || echo missing)"
 }
 
-carrier_diag(){
-  echo "运营商/热点诊断："
-  echo
-  ports_status
-  echo "建议在 Windows v2rayN 电脑上分别连不同网络后测试："
-  echo "  Test-NetConnection 你的VPS_IP -Port 443"
-  echo "  Test-NetConnection 你的VPS_IP -Port 8443"
-  echo "  Test-NetConnection 你的VPS_IP -Port 2053"
-  echo "  Test-NetConnection 你的VPS_IP -Port 15593"
-  echo
-  echo "判断："
-  echo "- 同一节点，移动能用、联通不行：多半是运营商线路/端口问题。"
-  echo "- iPhone 热点不行、其他热点能用：多半是热点网络、IPv6、DNS 或运营商出口问题。"
-  echo "- 443 能通，高位端口不通：优先保留 Reality 443。"
-  echo "- 端口通但客户端不通：看 v2rayN/v2rayNG 的路由、DNS、Mux、IPv6。"
+runtime_helper() {
+  local helper="/opt/myvps/bin/myvps_runtime.py"
+  [[ -r "$helper" ]] || helper="$(cd "$(dirname "$0")" && pwd)/myvps_runtime.py"
+  [[ -f "$helper" ]] || die "Runtime helper missing: myvps_runtime.py"
+  need python3
+  python3 "$helper" "$@"
+}
+status() {
+  msg "MyVPS $VERSION — live read-only status of existing services"
+  if [[ -f /opt/myvps/bin/myvps_runtime.py || -f "$(dirname "$0")/myvps_runtime.py" ]]; then
+    runtime_helper status
+  else
+    basic_status
+    msg "Install the companion myvps_runtime.py for full live status."
+  fi
+}
+chain_status() { runtime_helper status; }
+reality_domain_status() { runtime_helper reality-domain-status; }
+chain_test() { runtime_helper chain-test; }
+backup_status() { runtime_helper backup-status; }
+xhttp_status() { runtime_helper xhttp-status; }
+xhttp_client() {
+  require_root
+  [[ -t 1 ]] || die "XHTTP client credentials are only shown in your own interactive terminal."
+  local info="/etc/myvps/xhttp/client-info.json"
+  [[ -r "$info" ]] || die "XHTTP client info not found."
+  cat "$info"
+}
+backup_watch() {
+  require_root
+  local watcher="/opt/myvps/bin/myvps_backup_watch.py"
+  [[ -r "$watcher" ]] || die "Backup watcher not installed."
+  python3 "$watcher" "$@"
+}
+legacy_menu() {
+  require_root
+  [[ -t 0 ]] || die "Legacy menus require an interactive terminal."
+  local which="$1" path
+  case "$which" in
+    main) path="/root/my_vps_manager.sh" ;;
+    exit) path="/root/my_vps_exit_manager.sh" ;;
+    cf) path="/root/my_vps_cf_ws_manager.sh" ;;
+    *) die "Unknown legacy menu." ;;
+  esac
+  [[ -f "$path" && -r "$path" ]] || die "Legacy script absent: $which"
+  [[ "$(readlink -f "$path")" != "$(readlink -f "$0")" ]] || die "Refusing to recurse into this manager."
+  msg "Opening installed legacy $which manager; production ownership remains unchanged."
+  /usr/bin/bash "$path"
 }
 
-backup_conf(){
-  need_root
-  local dir="/root/my-vps-backup-$(date +%F_%H%M%S)"
-  mkdir -p "$dir"
-  [[ -d /etc/v2ray-agent ]] && tar -czf "$dir/v2ray-agent.tar.gz" /etc/v2ray-agent 2>/dev/null || true
-  [[ -d /usr/local/etc/xray ]] && tar -czf "$dir/xray.tar.gz" /usr/local/etc/xray 2>/dev/null || true
-  [[ -d /usr/local/etc/sing-box ]] && tar -czf "$dir/sing-box.tar.gz" /usr/local/etc/sing-box 2>/dev/null || true
-  [[ -d /etc/nginx ]] && tar -czf "$dir/nginx.tar.gz" /etc/nginx 2>/dev/null || true
-  ok "备份完成: $dir"
+doctor() {
+  status
+  if [[ -x "$BIN" && -f "$CONF" ]]; then
+    msg "Testing owned Xray configuration"
+    XRAY_LOCATION_ASSET=/opt/myvps/xray/assets "$BIN" run -test -config "$CONF" \
+      && msg "Owned Xray config: PASS" || msg "Owned Xray config: FAIL"
+  fi
+  if [[ -f /etc/xray-racknerd-443/config.json ]]; then
+    local legacy_bin=""
+    if [[ -x /usr/local/bin/xray ]]; then legacy_bin="/usr/local/bin/xray"
+    elif command -v xray >/dev/null 2>&1; then legacy_bin=$(command -v xray); fi
+    if [[ -n "$legacy_bin" ]]; then
+      msg "Validating existing /etc/xray-racknerd-443/config.json (read-only)"
+      "$legacy_bin" run -test -config /etc/xray-racknerd-443/config.json \
+        && msg "Existing REALITY config: PASS" || msg "Existing REALITY config: FAIL"
+    else
+      msg "Existing REALITY config found, but no old Xray binary found for validation."
+    fi
+  fi
+  if command -v nginx >/dev/null 2>&1; then
+    msg "Checking nginx syntax (read-only)"
+    nginx -t 2>&1 || true
+  fi
+  msg "This does NOT diagnose public-IP reachability or GFW filtering."
 }
 
-redact(){
-  sed -E \
-    -e 's#vless://[^[:space:]]+#vless://***REDACTED***#g' \
-    -e 's#trojan://[^[:space:]]+#trojan://***REDACTED***#g' \
-    -e 's#[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}#***UUID***#g' \
-    -e 's#(privateKey|PrivateKey|shortId|ShortId|password|passwd|uuid|id)[":= ]+[^, }]+#\1: ***REDACTED***#g'
+deps_install() {
+  require_root
+  need apt-get
+  confirm "Install curl jq unzip ca-certificates openssl gnupg rclone tar iproute2? No DNS/firewall changes."
+  apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    curl ca-certificates jq unzip openssl gnupg rclone tar iproute2
 }
 
-safe_report(){
-  need_root
-  mkdir -p "$REPORT_DIR"
-  local f="$REPORT_DIR/report-$(date +%F_%H%M%S).txt"
-  {
-    echo "My VPS Safe Diagnostic Report"
-    echo "Time: $(date '+%F %T %Z')"
-    echo
-    echo "== System =="
-    grep -E '^PRETTY_NAME=' /etc/os-release 2>/dev/null || true
-    uname -a
-    free -h || true
-    df -h / || true
-    echo
-    echo "== IP / ASN =="
-    curl -4 -s --max-time 8 https://ipinfo.io/json || true
-    echo
-    echo "== DNS =="
-    cat /etc/resolv.conf 2>/dev/null || true
-    echo
-    echo "== Time =="
-    date
-    timedatectl 2>/dev/null | sed -n '1,12p' || true
-    echo
-    echo "== Ports =="
-    ss -tulpen 2>/dev/null | grep -E ':(22|80|443|8443|2053|15593)\b' || true
-    echo
-    echo "== Services =="
-    for s in xray sing-box nginx fail2ban; do
-      systemctl --no-pager --full status "$s" 2>/dev/null | sed -n '1,10p' || true
-      echo
-    done
-    echo "== Recent Manager Log =="
-    tail -n 120 "$LOG" 2>/dev/null | redact || true
-    echo
-    echo "== Recent Xray Log =="
-    journalctl -u xray -n 80 --no-pager 2>/dev/null | redact || true
-  } > "$f"
-  chmod 600 "$f" || true
-  ok "安全诊断报告已生成：$f"
-  warn "报告不主动读取配置文件，但仍会包含公网 IP。发给别人前自己先看一遍。"
+self_install() {
+  require_root
+  local source helper source_dir
+  source=$(readlink -f "$0")
+  source_dir=$(dirname "$source")
+  helper="$source_dir/myvps_runtime.py"
+  [[ -f "$helper" ]] || die "Install requires myvps_runtime.py beside the manager."
+  need python3
+  bash -n "$source" || die "Bash syntax invalid."
+  python3 -m py_compile "$helper" || die "Python diagnostics syntax invalid."
+  confirm "Install parallel command myvps-next only? Existing /root/my_vps_manager.sh and myvps are kept."
+  install -d -m 755 /opt/myvps/bin
+  if [[ -f "$SELF" ]]; then cp -a "$SELF" "$SELF.previous"; fi
+  install -m 700 "$source" "$SELF.next"
+  install -m 700 "$helper" /opt/myvps/bin/myvps_runtime.py.next
+  mv -f "$SELF.next" "$SELF"
+  mv -f /opt/myvps/bin/myvps_runtime.py.next /opt/myvps/bin/myvps_runtime.py
+  ln -sfn "$SELF" /usr/local/bin/myvps-next
+  msg "Installed myvps-next in parallel; live myvps and all network services unchanged."
+}
+self_update() {
+  die "RC update disabled: the published main branch is not the candidate. Review and install a pinned tested release; no changes made."
 }
 
-open_installer(){
-  need_root
-  if has vasma; then vasma; return; fi
-  dl "$UPSTREAM" /root/install.sh
-  chmod 700 /root/install.sh
-  bash /root/install.sh
+xray_install() {
+  require_root
+  local d release url digest actual expected
+  for d in curl jq unzip sha256sum; do need "$d"; done
+  [[ "$(uname -m)" == "x86_64" ]] || die "This release candidate supports x86_64 only."
+  confirm "Install verified official Xray-core binary separately (no existing unit changes)?"
+  make_tmp
+  release=$(curl -fsSL --connect-timeout 10 --max-time 25 \
+    https://api.github.com/repos/XTLS/Xray-core/releases/latest)
+  url=$(jq -r '.assets[] | select(.name=="Xray-linux-64.zip") | .browser_download_url' <<< "$release" | head -n1)
+  digest=$(jq -r '.assets[] | select(.name=="Xray-linux-64.zip") | .digest' <<< "$release" | head -n1)
+  [[ "$url" == https://github.com/XTLS/Xray-core/releases/download/* ]] || die "Unexpected release URL."
+  [[ "$digest" =~ ^sha256:[[:xdigit:]]{64}$ ]] || die "No official SHA-256 release digest; aborting."
+  expected=$(printf '%s' "$digest" | cut -d: -f2)
+  curl -fL --retry 3 --connect-timeout 15 --max-time 300 -o "$TMP_DIR/xray.zip" "$url"
+  actual=$(sha256sum "$TMP_DIR/xray.zip" | awk '{print $1}')
+  [[ "${actual,,}" == "${expected,,}" ]] || die "Xray release SHA-256 mismatch."
+  mkdir -p "$TMP_DIR/unpacked"
+  unzip -q "$TMP_DIR/xray.zip" -d "$TMP_DIR/unpacked"
+  [[ -f "$TMP_DIR/unpacked/xray" ]] || die "Xray binary absent in archive."
+  chmod 700 "$TMP_DIR/unpacked/xray"
+  "$TMP_DIR/unpacked/xray" version >/dev/null || die "Downloaded binary cannot execute."
+  if [[ -f "$CONF" ]]; then
+    XRAY_LOCATION_ASSET="$TMP_DIR/unpacked" \
+      "$TMP_DIR/unpacked/xray" run -test -config "$CONF" || die "New binary rejects owned config."
+  fi
+  install -d -m 755 /opt/myvps/xray /opt/myvps/xray/assets
+  if [[ -e "$BIN" ]]; then cp -a "$BIN" "$BIN.previous"; fi
+  install -m 755 "$TMP_DIR/unpacked/xray" "$BIN.next"
+  mv -f "$BIN.next" "$BIN"
+  local asset
+  for asset in geoip.dat geosite.dat; do
+    if [[ -f "$TMP_DIR/unpacked/$asset" ]]; then
+      install -m 644 "$TMP_DIR/unpacked/$asset" "/opt/myvps/xray/assets/$asset"
+    fi
+  done
+  msg "Verified Xray installed; running services NOT restarted."
 }
 
-leak_tip(){
-  echo "泄露处理提醒："
-  echo "如果你曾经截图、发聊天、发仓库时暴露过以下内容："
-  echo "- UUID"
-  echo "- PrivateKey"
-  echo "- PublicKey"
-  echo "- ShortId"
-  echo "- 节点链接 / 订阅链接"
-  echo
-  echo "建议进入：2. 安装/管理节点"
-  echo "然后在 v2ray-agent 里重置用户或重新生成节点，再重新导入 v2rayN/v2rayNG。"
+ensure_user() {
+  if ! id myvpsxray >/dev/null 2>&1; then
+    useradd --system --no-create-home --shell /usr/sbin/nologin myvpsxray
+  fi
 }
 
-client_tips(){
-  cat <<'EOF'
-专门给你的 v2rayN / v2rayNG 建议：
-
-推荐节点：VLESS Reality Vision
-端口：优先 443，备用 8443 / 2053 / 15593
-flow：xtls-rprx-vision
-fingerprint：chrome
-Mux：关闭
-IPv6：关闭或优先 IPv4
-路由：先用全局测试，确认稳定后再改规则
-DNS：尽量让 DNS 跟随节点，避免运营商 DNS 影响
-
-v2rayN：
-- 系统代理：自动配置系统代理
-- 测速 -1 ms 不等于 VPS 一定坏，先看服务、端口和日志
-- Windows 可用：Test-NetConnection VPS_IP -Port 443
-
-v2rayNG：
-- 先全局模式测试
-- 规则模式下，AI 相关域名要放在直连规则前面
-- 手机热点网络不稳时，先关 IPv6 或优先 IPv4
-EOF
-  echo
-  leak_tip
+reality_init() {
+  require_root
+  need jq; need openssl
+  [[ -x "$BIN" ]] || die "Run xray-install first."
+  [[ ! -e "$CONF" ]] || die "Owned config exists: refusing to overwrite."
+  [[ -t 0 ]] || die "Interactive initialization only."
+  local target sni keys private uuid short
+  read -r -p "REALITY target hostname [dl.google.com]: " target
+  target=$(printf '%s' "$target" | tr -d '\r')
+  target="${target:-dl.google.com}"
+  [[ "$target" =~ ^[a-zA-Z0-9.-]+$ ]] || die "Invalid hostname."
+  sni="$target"
+  keys=$("$BIN" x25519)
+  private=$(printf '%s\n' "$keys" | awk -F': ' '/Private/ { print $2; exit }')
+  [[ -n "$private" ]] || die "Cannot parse x25519 private key."
+  uuid=$(cat /proc/sys/kernel/random/uuid)
+  short=$(openssl rand -hex 8)
+  msg "LOCAL test 127.0.0.1:15594 only. No public 443, nginx or Cloudflare changes."
+  confirm "Generate owned REALITY test config and disabled service?"
+  ensure_user
+  install -d -m 750 -o root -g myvpsxray /etc/myvps/xray
+  jq -n --arg id "$uuid" --arg private "$private" --arg target "$target" --arg sni "$sni" --arg sid "$short" '{
+    log:{loglevel:"warning"},
+    inbounds:[{
+      tag:"reality-loopback",listen:"127.0.0.1",port:15594,protocol:"vless",
+      settings:{clients:[{id:$id,flow:"xtls-rprx-vision"}],decryption:"none"},
+      streamSettings:{network:"tcp",security:"reality",
+        realitySettings:{show:false,target:($target+":443"),serverNames:[$sni],privateKey:$private,shortIds:[$sid]}
+      }
+    }],
+    outbounds:[{tag:"direct",protocol:"freedom"}]
+  }' > /etc/myvps/xray/config.json.next
+  chown root:myvpsxray /etc/myvps/xray/config.json.next
+  chmod 640 /etc/myvps/xray/config.json.next
+  XRAY_LOCATION_ASSET=/opt/myvps/xray/assets \
+    "$BIN" run -test -config /etc/myvps/xray/config.json.next \
+    || die "Invalid candidate; left .next for inspection."
+  mv /etc/myvps/xray/config.json.next "$CONF"
+  cat > /etc/systemd/system/myvps-xray.service <<'UNIT'
+[Unit]
+Description=Owned Xray loopback test instance
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+User=myvpsxray
+Group=myvpsxray
+Environment=XRAY_LOCATION_ASSET=/opt/myvps/xray/assets
+ExecStart=/opt/myvps/xray/xray run -config /etc/myvps/xray/config.json
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+[Install]
+WantedBy=multi-user.target
+UNIT
+  chmod 644 /etc/systemd/system/myvps-xray.service
+  systemctl daemon-reload
+  msg "Created local-only 15594 instance. Service DISABLED and STOPPED until xray-start."
+  msg "Keep UUID/keys secret; do not alter public 443 until separately tested."
 }
 
-status_text(){
-  case "$1" in
-    000) echo "失败" ;;
-    2*|3*) echo "可连" ;;
-    401|403) echo "有响应/可能受限" ;;
-    451) echo "地区限制" ;;
-    *) echo "有响应" ;;
+xray_start() {
+  require_root
+  [[ -x "$BIN" && -f "$CONF" ]] || die "Owned Xray not initialized."
+  XRAY_LOCATION_ASSET=/opt/myvps/xray/assets "$BIN" run -test -config "$CONF" \
+    || die "Configuration test failed."
+  confirm "Enable/start ONLY myvps-xray.service?"
+  systemctl enable --now "$SERVICE"
+  systemctl --no-pager status "$SERVICE" | head -n 15 || true
+}
+
+backup_helper() {
+  require_root
+  local helper="/opt/myvps/backup/myvps_backup.sh"
+  [[ -f "$helper" ]] || helper="$(cd "$(dirname "$0")" && pwd)/myvps_backup.sh"
+  [[ -f "$helper" ]] || die "Backup companion missing; install myvps_backup.sh first."
+  /usr/bin/bash "$helper" "$@"
+}
+backup_init() { backup_helper init; }
+backup_run() {
+  local kind="$1"
+  [[ "$kind" != vps ]] || kind=config
+  backup_helper run "$kind"
+}
+install_timers() { backup_helper timers; }
+
+usage() {
+  cat <<'USAGE'
+myvps-next v2.3.1-rc3 — live-VPS-aware, non-destructive manager
+  status          Read-only live nginx/REALITY/SOCKS/backup status (default)
+  chain-test      End-to-end SOCKS5 authenticated HTTPS test (no credentials printed)
+  reality-domain-status   Check 2b.gooffu.tech DNS and TCP 443 (NOT REALITY handshake)
+  backup-status   Check daily timers, cloud backup ages and recent success
+  backup-watch    Test backup freshness (36h), exit nonzero on failures
+  xhttp-status    Check isolated XHTTP service (no secrets)
+  xhttp-client    Show XHTTP client info in your own interactive terminal
+  legacy-main     Open existing v1.2.0 VPS manager (interactive)
+  legacy-exit     Open existing exit/chain manager (interactive)
+  legacy-cf       Open existing CF-WS manager (interactive)
+  doctor          Check owned Xray config and nginx syntax
+  deps-install    Install prerequisites (confirmation required)
+  self-install    Install parallel myvps-next; preserve the existing myvps command
+  self-update     Disabled in release candidate to prevent main/RC mismatch
+  xray-install    Install SHA256-verified official Xray binary separately
+  reality-init    Generate local-only 15594 REALITY instance (no start)
+  xray-start      Start ONLY owned myvps-xray service
+  backup-init     Configure working GDrive remote and create offline recovery key
+  backup-vps      Snapshot/encrypt/upload config files to GDrive
+  backup-blog     SQLite-consistent blog archive to GDrive
+  backup-timers   Enable daily backups 02:00/02:30 Asia/Shanghai
+  backup-test     Encrypted test upload/check/delete (does not touch existing backups)
+  backup-restore-config  Download/decrypt/verify latest config archive
+  backup-restore-blog    Download/decrypt/verify latest blog archive
+  help            This usage message
+
+Safety: No automatic DNS, UFW, nginx, 443, legacy Xray, PM2, or Cloudflare changes.
+XHTTP requires separately tested server/client/CDN integration, not automatic migration.
+USAGE
+}
+menu() {
+  if [[ ! -t 0 ]]; then status; return; fi
+  cat <<'MENU'
+============ MyVPS v2.2 RC ============
+1  只读状态与端口
+2  只读诊断（含旧 REALITY / nginx）
+3  安装官方校验版 Xray（独立）
+4  初始化本机 REALITY 测试节点
+5  启动自有测试节点
+6  VPS 加密备份到 Google Drive
+7  博客独立加密备份
+8  初始化加密备份口令
+9  检查/安装每天备份定时器
+10 检查 GitHub 更新（候选版本禁用）
+11 查看当前链式代理配置
+12 测试 SOCKS5 链式出口
+13 查看云端备份日期
+14 进入旧版 VPS 管理菜单
+15 进入住宅/WARP 出口管理
+16 进入 CF-WS 管理菜单
+17 检查 XHTTP 状态
+18 检查云端备份健康告警
+19 显示 XHTTP 客户端参数（仅本机终端）
+20 检查 REALITY 连接域名 2b.gooffu.tech
+0  退出
+=======================================
+MENU
+  local choice
+  read -r -p "请选择: " choice
+  case "$choice" in
+    1) status ;;
+    2) doctor ;;
+    3) xray_install ;;
+    4) reality_init ;;
+    5) xray_start ;;
+    6) backup_run vps ;;
+    7) backup_run blog ;;
+    8) backup_init ;;
+    9) install_timers ;;
+    10) self_update ;;
+    11) chain_status ;;
+    12) chain_test ;;
+    13) backup_status ;;
+    14) legacy_menu main ;;
+    15) legacy_menu exit ;;
+    16) legacy_menu cf ;;
+    17) xhttp_status ;;
+    18) backup_watch ;;
+    19) xhttp_client ;;
+    20) reality_domain_status ;;
+    0) return ;;
+    *) msg "Invalid option"; return 2 ;;
   esac
 }
 
-probe(){
-  local name="$1" url="$2" data code time ip st
-  data=$(curl -4 -L -sS -o /dev/null --connect-timeout 6 --max-time 18 -w '%{http_code}|%{time_total}|%{remote_ip}' "$url" 2>/dev/null || echo "000|-1|-")
-  IFS='|' read -r code time ip <<<"$data"
-  st=$(status_text "$code")
-  printf "%-12s HTTP:%-4s %-18s 耗时:%-7s 远端:%s\n" "$name" "$code" "$st" "$time" "$ip"
-}
-
-show_exit_ip(){
-  echo "出口 IP:"
-  if has jq; then
-    curl -4 -s --max-time 8 https://ipinfo.io/json | jq -r '"IP: \(.ip)\n国家: \(.country)\n城市: \(.city)\nASN: \(.org)"' || true
-  else
-    curl -4 -s --max-time 8 https://ipinfo.io/json || true
-  fi
-  echo
-}
-
-ai_test(){
-  show_exit_ip
-  probe ChatGPT https://chatgpt.com/
-  probe OpenAI https://openai.com/
-  probe OpenAI_API https://api.openai.com/v1/models
-  probe OpenAI_CDN https://cdn.oaistatic.com/
-  probe OpenAI_File https://files.oaiusercontent.com/
-  probe Grok https://grok.com/
-  probe xAI https://x.ai/
-  probe X https://x.com/
-  echo
-  warn "检测是 VPS 出口连通性，不等于账号或平台一定放行。"
-}
-
-media_test(){
-  show_exit_ip
-  probe YouTube https://www.youtube.com/
-  probe Netflix https://www.netflix.com/
-  probe Disney https://www.disneyplus.com/
-  probe PrimeVideo https://www.primevideo.com/
-  probe TikTok https://www.tiktok.com/
-  probe Spotify https://www.spotify.com/
-  echo
-  warn "检测可连不等于片库解锁；片库和账号地区、IP 信誉有关。"
-}
-
-update_self(){
-  need_root
-  dl "$REPO/my_vps_manager.sh" "$SELF"
-  chmod 700 "$SELF"
-  ln -sf "$SELF" "$BIN"
-  ok "已更新。以后输入：myvps"
-}
-
-show_logs(){
-  tail -n 150 "$LOG" 2>/dev/null || true
-  journalctl -u xray -n 80 --no-pager 2>/dev/null || true
-}
-
-main_menu(){
-  while true; do
-    header
-    echo -e "${G}1${N}. 首次准备       ${D}装工具、修 DNS/时间、防火墙、BBR${N}"
-    echo -e "${G}2${N}. 安装/管理节点  ${D}打开 v2ray-agent，上游菜单只用来装节点${N}"
-    echo -e "${G}3${N}. 状态/运营商诊断 ${D}端口、服务、联通/移动/热点排查${N}"
-    echo -e "${G}4${N}. 备份/诊断报告   ${D}备份配置，生成安全排查报告${N}"
-    echo -e "${G}5${N}. AI 检测        ${D}GPT/Grok/OpenAI/X 出口状态${N}"
-    echo -e "${G}6${N}. 影视检测       ${D}YouTube/Netflix/Disney 等出口状态${N}"
-    echo -e "${G}7${N}. 客户端/安全建议 ${D}v2rayN/v2rayNG 和泄露重置提醒${N}"
-    echo -e "${G}8${N}. 查看日志       ${D}出问题先看这里${N}"
-    echo -e "${G}9${N}. 更新本脚本     ${D}以后只维护这个脚本${N}"
-    echo -e "${G}0${N}. 退出"
-    echo
-    read -rp "请选择: " c || true
-    case "$c" in
-      1) header; update_self; install_base; fix_basic; vps_info; pause ;;
-      2) open_installer ;;
-      3) header; node_hint; echo; carrier_diag; pause ;;
-      4) header; backup_conf; safe_report; pause ;;
-      5) header; ai_test; pause ;;
-      6) header; media_test; pause ;;
-      7) header; client_tips; pause ;;
-      8) header; show_logs; pause ;;
-      9) header; update_self; pause ;;
-      0) exit 0 ;;
-    esac
-  done
-}
-
 case "${1:-}" in
-  update) update_self ;;
-  fix) install_base; fix_basic ;;
-  status) ports_status ;;
-  diag) node_hint; echo; carrier_diag ;;
-  report) safe_report ;;
-  ai) ai_test ;;
-  media) media_test ;;
-  tips) client_tips ;;
-  *) main_menu ;;
+  "") menu ;;
+  status) status ;;
+  doctor) doctor ;;
+  chain-status) chain_status ;;
+  chain-test) chain_test ;;
+  reality-domain-status) reality_domain_status ;;
+  backup-status) backup_status ;;
+  backup-watch) backup_watch ;;
+  xhttp-status) xhttp_status ;;
+  xhttp-client) xhttp_client ;;
+  legacy-main) legacy_menu main ;;
+  legacy-exit) legacy_menu exit ;;
+  legacy-cf) legacy_menu cf ;;
+  deps-install) deps_install ;;
+  self-install) self_install ;;
+  self-update) self_update ;;
+  xray-install) xray_install ;;
+  reality-init) reality_init ;;
+  xray-start) xray_start ;;
+  backup-init) backup_init ;;
+  backup-vps) backup_run vps ;;
+  backup-blog) backup_run blog ;;
+  backup-timers) install_timers ;;
+  backup-test) backup_helper probe ;;
+  backup-restore-config) backup_helper restore-test config ;;
+  backup-restore-blog) backup_helper restore-test blog ;;
+  help|-h|--help) usage ;;
+  *) usage; exit 2 ;;
 esac
