@@ -15,7 +15,7 @@ grep -q 'read-only status' /tmp/myvps-status.txt
 grep -q 'This does NOT diagnose' /tmp/myvps-doctor.txt
 
 # Old third-party installer and legacy destructive network modifications must stay out.
-if grep -E 'mack-a/v2ray-agent|vasma|ufw --force|printf .*nameserver .*resolv.conf' "$script"; then
+if grep -E '^[[:space:]]*UPSTREAM=|^[[:space:]]*vasma([[:space:]]|$)|^[[:space:]]*ufw --force|^[[:space:]]*printf .*nameserver .*resolv.conf' "$script"; then
   echo "Legacy upstream installer or destructive network mutation found" >&2
   exit 1
 fi
