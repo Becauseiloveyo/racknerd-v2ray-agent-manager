@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 umask 077
 
-VERSION="2.2.0-rc1"
+VERSION="2.2.1-rc2"
 REPO_RAW="https://raw.githubusercontent.com/Becauseiloveyo/racknerd-v2ray-agent-manager/main"
 SELF="/root/my_vps_manager.sh"
 BIN="/opt/myvps/xray/xray"
@@ -238,109 +238,24 @@ xray_start() {
   systemctl --no-pager status "$SERVICE" | head -n 15 || true
 }
 
-backup_init() {
+backup_helper() {
   require_root
-  need openssl
-  install -d -m 700 /etc/myvps
-  [[ ! -e "$BACKUP_KEY" ]] || die "Backup passphrase file already exists: $BACKUP_KEY"
-  confirm "Generate backup passphrase? Save an OFFLINE recovery copy."
-  openssl rand -base64 48 > "$BACKUP_KEY"
-  chmod 600 "$BACKUP_KEY"
-  msg "Created $BACKUP_KEY. Save it offline or you cannot restore backups."
+  local helper="/opt/myvps/backup/myvps_backup.sh"
+  [[ -f "$helper" ]] || helper="$(cd "$(dirname "$0")" && pwd)/myvps_backup.sh"
+  [[ -f "$helper" ]] || die "Backup companion missing; install myvps_backup.sh first."
+  /usr/bin/bash "$helper" "$@"
 }
-
-backup_remote() {
-  need rclone
-  local remote
-  remote="${MYVPS_BACKUP_REMOTE:-}"
-  if [[ -z "$remote" ]]; then
-    if rclone listremotes | grep -Fxq 'ggdrive:'; then remote="ggdrive:"
-    elif rclone listremotes | grep -Fxq 'gdrive:'; then remote="gdrive:"
-    else die "Configure ggdrive: or gdrive:, or set MYVPS_BACKUP_REMOTE."; fi
-  fi
-  [[ "$remote" =~ ^[A-Za-z][A-Za-z0-9_-]*:$ ]] || die "Invalid rclone remote."
-  rclone listremotes | grep -Fxq "$remote" || die "Specified remote not configured."
-  printf '%s' "$remote"
-}
-
+backup_init() { backup_helper init; }
 backup_run() {
-  require_root
-  local kind="$1" remote destination name now path d
-  for d in tar gpg rclone; do need "$d"; done
-  [[ -s "$BACKUP_KEY" ]] || die "Run backup-init; keep passphrase offline."
-  remote=$(backup_remote)
-  now=$(date -u +%Y%m%dT%H%M%SZ)
-  name="$(hostname -s)-$kind-$now.tar.gz.gpg"
-  make_tmp
-  local -a paths=()
-  if [[ "$kind" == "vps" ]]; then
-    for path in etc root opt var/www usr/local/etc; do
-      [[ -e "/$path" ]] && paths+=("$path")
-    done
-    destination="VPS-Backups/racknerd/full"
-  elif [[ "$kind" == "blog" ]]; then
-    [[ -d /root/my-blog ]] || die "/root/my-blog not found."
-    paths=(root/my-blog)
-    [[ -d /root/.pm2 ]] && paths+=(root/.pm2)
-    [[ -d /etc/nginx ]] && paths+=(etc/nginx)
-    destination="VPS-Backups/racknerd/blog"
-  else die "Unknown backup kind"; fi
-  [[ "${#paths[@]}" -gt 0 ]] || die "No backup paths."
-  msg "Encrypting $kind archive and uploading to $remote$destination"
-  tar -C / -czf - --exclude='root/.cache' --exclude='root/my-vps-backup*' \
-    --exclude='*/node_modules' --exclude='*/.git' "${paths[@]}" \
-    | gpg --batch --yes --pinentry-mode loopback --passphrase-file "$BACKUP_KEY" \
-      --symmetric --cipher-algo AES256 -o "$TMP_DIR/$name"
-  chmod 600 "$TMP_DIR/$name"
-  rclone copyto "$TMP_DIR/$name" "$remote$destination/$name" --retries 3 --transfers 1
-  msg "Encrypted backup uploaded: $remote$destination/$name"
-  msg "This is FILE-level backup, not database-consistent whole-disk imaging."
+  local kind="$1"
+  [[ "$kind" != vps ]] || kind=config
+  backup_helper run "$kind"
 }
-
-install_timers() {
-  require_root
-  [[ -s "$BACKUP_KEY" ]] || die "Run backup-init first."
-  need rclone
-  backup_remote >/dev/null
-  [[ -f "$SELF" ]] || die "Run self-install first."
-  confirm "Enable weekly VPS (Sun 02:00) and blog (Sun 03:00) encrypted-backup timers?"
-  local kind
-  for kind in vps blog; do
-    cat > "/etc/systemd/system/myvps-backup-$kind.service" <<EOF
-[Unit]
-Description=MyVPS encrypted $kind backup
-[Service]
-Type=oneshot
-ExecStart=/usr/bin/bash $SELF backup-$kind
-EOF
-    chmod 644 "/etc/systemd/system/myvps-backup-$kind.service"
-  done
-  cat > /etc/systemd/system/myvps-backup-vps.timer <<'EOF'
-[Unit]
-Description=Weekly encrypted VPS files backup
-[Timer]
-OnCalendar=Sun *-*-* 02:00:00
-Persistent=true
-[Install]
-WantedBy=timers.target
-EOF
-  cat > /etc/systemd/system/myvps-backup-blog.timer <<'EOF'
-[Unit]
-Description=Weekly encrypted blog files backup
-[Timer]
-OnCalendar=Sun *-*-* 03:00:00
-Persistent=true
-[Install]
-WantedBy=timers.target
-EOF
-  systemctl daemon-reload
-  systemctl enable --now myvps-backup-vps.timer myvps-backup-blog.timer
-  msg "Timers enabled. Run a manual backup and RESTORE TEST before relying on them."
-}
+install_timers() { backup_helper timers; }
 
 usage() {
   cat <<'USAGE'
-myvps v2.2.0-rc1 — self-owned, non-destructive VPS manager
+myvps v2.2.1-rc2 — self-owned, non-destructive VPS manager
   status          Read-only status (default)
   doctor          Check owned Xray config and nginx syntax
   deps-install    Install prerequisites (confirmation required)
@@ -349,10 +264,13 @@ myvps v2.2.0-rc1 — self-owned, non-destructive VPS manager
   xray-install    Install SHA256-verified official Xray binary separately
   reality-init    Generate local-only 15594 REALITY instance (no start)
   xray-start      Start ONLY owned myvps-xray service
-  backup-init     Create local backup encryption passphrase
-  backup-vps      Encrypt and upload VPS files separately
-  backup-blog     Encrypt and upload isolated blog files
-  backup-timers   Enable separate weekly backup systemd timers
+  backup-init     Configure working GDrive remote and create offline recovery key
+  backup-vps      Snapshot/encrypt/upload config files to GDrive
+  backup-blog     SQLite-consistent blog archive to GDrive
+  backup-timers   Enable daily backups 02:00/02:30 Asia/Shanghai
+  backup-test     Encrypted test upload/check/delete (does not touch existing backups)
+  backup-restore-config  Download/decrypt/verify latest config archive
+  backup-restore-blog    Download/decrypt/verify latest blog archive
   help            This usage message
 
 Safety: No automatic DNS, UFW, nginx, 443, legacy Xray, PM2, or Cloudflare changes.
@@ -408,6 +326,9 @@ case "${1:-}" in
   backup-vps) backup_run vps ;;
   backup-blog) backup_run blog ;;
   backup-timers) install_timers ;;
+  backup-test) backup_helper probe ;;
+  backup-restore-config) backup_helper restore-test config ;;
+  backup-restore-blog) backup_helper restore-test blog ;;
   help|-h|--help) usage ;;
   *) usage; exit 2 ;;
 esac
