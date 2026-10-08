@@ -14,3 +14,4 @@ jobs:
       - name: ShellCheck (errors)
         run: |
           shellcheck --severity=error my_vps_manager.sh myvps_backup.sh tests/smoke.sh
+          python3 -m py_compile myvps_runtime.py
