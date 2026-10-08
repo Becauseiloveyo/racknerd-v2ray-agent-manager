@@ -52,7 +52,7 @@ XHTTP UUID、路径和客户端连接参数仅保存在 VPS 的 `/etc/myvps/xhtt
 
 新增 `myvps_backup_watch.py`：每次核对两个 systemd 定时器、上次执行结果和 Google Drive 新备份时间。任一类备份超过 36 小时未更新，会记录 `BACKUP_ALERT` 并返回非零退出状态。
 
-监测日志目前仅保留在 VPS 的 systemd journal 中，**不等于已经向手机、邮箱或 GitHub 发送通知**。可在确定接收渠道后进一步接入外发告警。
+监测 timer 已经部署到 VPS，日志保留在 VPS 的 systemd journal 中，**不等于已经向手机、邮箱或 GitHub 发送通知**。可在确定接收渠道后进一步接入外发告警。
 
 ### 新增只读命令
 
@@ -121,6 +121,28 @@ systemctl list-timers --all 'myvps-backup-*'
 ```
 
 **注意**：当前只备份系统配置和博客内容，并非完整硬盘镜像；不包含外部数据库。首次上线必须验证上传和恢复。暂不自动清理旧备份对象；需要单独配置容量监测和保留策略。
+
+## 已上线的 XHTTP 与备份监控验收（2026-10-08）
+
+- **VLESS/XHTTP + TLS via Cloudflare**：`cf.gooffu.tech:443`，Xray 服务 `myvps-xhttp.service` 只监听 `127.0.0.1:18081`；XHTTP 使用随机路径、独立 UUID 和 `packet-up` 模式，出站沿用当前认证 SOCKS 链式代理。
+- nginx 在既有 `/etc/nginx/conf.d/cf-ws-backup.conf` 增加独立 XHTTP 路由；原配置备份为 `/etc/myvps/xhttp/backups/cf-ws-backup.before-xhttp.conf`，并保留原 WS 路由。
+- 完整客户端连接信息仅保存在 VPS `/etc/myvps/xhttp/client-info.json`（权限 600）；SSH 交互式终端运行 `sudo myvps-next xhttp-client` 查看。**不要将此文件或 URI 公开提交 GitHub。**
+- 从 VPS 上的临时 Xray 客户端经过**Cloudflare 公网域名**发起 XHTTP/TLS 请求，目标网站返回 HTTP 200。此验证不等于已覆盖中国境内不同运营商或移动网络。
+- 本地 HTTP 入口回归：`cf.gooffu.tech` 返回 204，`blog.gooffu.tech` 返回 200；nginx 配置通过，REALITY/WS/XHTTP 服务 active。
+- 备份监控 `/opt/myvps/bin/myvps_backup_watch.py` 与 `myvps-backup-watch.timer`：北京时间 04:00、10:00、16:00、22:00 检测一次，两类归档时效阈值 36 小时，异常记录为 `BACKUP_ALERT` 并让服务返回失败状态。当前**没有**手机/邮箱外发提醒。
+
+可用命令：
+```bash
+myvps-next status
+myvps-next xhttp-status
+myvps-next xhttp-client        # 仅本人 SSH 交互式终端展示凭据
+myvps-next backup-status
+myvps-next backup-watch
+systemctl list-timers --all | grep myvps-backup
+journalctl -u myvps-backup-watch.service --since '2 days ago' --no-pager
+```
+
+如果仅需停用本次新增 XHTTP，先禁用服务，再手工审查与恢复 nginx 的 XHTTP 添加段；**不要删除或覆盖现有 CF-WS 和 REALITY 配置**。完整回滚前必须有本次备份文件，并验证 `nginx -t` 后再 reload。
 
 ## 回滚边界
 
