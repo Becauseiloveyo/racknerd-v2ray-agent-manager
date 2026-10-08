@@ -87,8 +87,18 @@ self_update() {
   curl -fsSL --retry 3 --connect-timeout 10 --max-time 60 \
     -o "$TMP_DIR/my_vps_manager.sh" "$REPO_RAW/my_vps_manager.sh"
   bash -n "$TMP_DIR/my_vps_manager.sh" || die "Downloaded script failed syntax check."
-  grep -q '^VERSION=' "$TMP_DIR/my_vps_manager.sh" || die "Missing version header."
-  msg "Available: $(grep '^VERSION=' "$TMP_DIR/my_vps_manager.sh" | head -n 1)"
+  grep -q '^# Self-owned VPS manager:' "$TMP_DIR/my_vps_manager.sh" \
+    || die "Refusing to install legacy non-owned launcher."
+  if grep -Eq 'mack-a/v2ray-agent|vasma' "$TMP_DIR/my_vps_manager.sh"; then
+    die "Downloaded script references forbidden legacy installer."
+  fi
+  local remote_version major minor
+  remote_version=$(sed -n 's/^VERSION="\([^"]*\)".*/\1/p' "$TMP_DIR/my_vps_manager.sh" | head -n1)
+  [[ "$remote_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]] || die "Invalid remote version."
+  major=$(cut -d. -f1 <<< "$remote_version")
+  minor=$(cut -d. -f2 <<< "$remote_version")
+  (( major > 2 || (major == 2 && minor >= 2) )) || die "Refusing legacy main branch below v2.2."
+  msg "Available owned version: $remote_version"
   confirm "Replace $SELF with validated main-branch script? .previous is kept."
   [[ ! -f "$SELF" ]] || cp -a "$SELF" "$SELF.previous"
   install -m 700 "$TMP_DIR/my_vps_manager.sh" "$SELF.next"
