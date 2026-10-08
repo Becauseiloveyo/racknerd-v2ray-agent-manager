@@ -13,4 +13,4 @@ jobs:
         run: bash tests/smoke.sh
       - name: ShellCheck (errors)
         run: |
-          shellcheck --severity=error my_vps_manager.sh tests/smoke.sh
+          shellcheck --severity=error my_vps_manager.sh myvps_backup.sh tests/smoke.sh
