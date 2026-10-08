@@ -52,7 +52,7 @@ runtime_helper() {
   python3 "$helper" "$@"
 }
 status() {
-  msg "MyVPS $VERSION — live existing services (read-only)"
+  msg "MyVPS $VERSION — live read-only status of existing services"
   if [[ -f /opt/myvps/bin/myvps_runtime.py || -f "$(dirname "$0")/myvps_runtime.py" ]]; then
     runtime_helper status
   else
