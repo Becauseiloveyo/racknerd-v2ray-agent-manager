@@ -87,6 +87,11 @@ def status():
         chain_config_summary(data)
     else:
         print("xray_config=unreadable")
+    print("service_myvps-xhttp=", systemctl("is-active", "myvps-xhttp.service"), sep="")
+    xhttp_cfg = Path("/etc/myvps/xhttp/config.json")
+    xhttp_client = Path("/etc/myvps/xhttp/client-info.json")
+    print("xhttp_config_present=", xhttp_cfg.is_file(), sep="")
+    print("xhttp_client_info_present=", xhttp_client.is_file(), sep="")
     for name in ("config", "blog"):
         print("backup_timer_", name, "=", systemctl("is-active", f"myvps-backup-{name}.timer"), sep="")
         print("backup_timer_enabled_", name, "=", systemctl("is-enabled", f"myvps-backup-{name}.timer"), sep="")
@@ -196,12 +201,16 @@ def chain_test():
 
 def main():
     parser = argparse.ArgumentParser(description="Read-only live VPS diagnostics")
-    parser.add_argument("command", choices=("status", "backup-status", "chain-test"))
+    parser.add_argument("command", choices=("status", "backup-status", "chain-test", "xhttp-status"))
     args = parser.parse_args()
     if args.command == "status":
         status()
     elif args.command == "backup-status":
         latest_backups()
+    elif args.command == "xhttp-status":
+        print("xhttp_service=", systemctl("is-active", "myvps-xhttp.service"), sep="")
+        print("xhttp_config_present=", Path("/etc/myvps/xhttp/config.json").is_file(), sep="")
+        print("xhttp_client_info_present=", Path("/etc/myvps/xhttp/client-info.json").is_file(), sep="")
     else:
         return chain_test()
     return 0
