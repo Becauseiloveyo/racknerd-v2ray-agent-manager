@@ -17,6 +17,7 @@ import urllib.request
 XRAY = Path("/etc/xray-racknerd-443/config.json")
 BACKUP_REMOTE = Path("/etc/myvps/backup.remote")
 BACKUP_KEY = Path("/etc/myvps/backup.pass")
+REALITY_CONNECT_HOST = "2b.gooffu.tech"  # Client server address; NOT necessarily REALITY TLS SNI.
 BASE = "VPS-Backups"
 SERVICES = ("ssh", "nginx", "xray-racknerd-443", "fail2ban", "cron", "wg-quick@warp")
 MANAGERS = {
@@ -71,6 +72,26 @@ def chain_config_summary(data):
         print("reality_vless_inbound=", inbound.get("protocol") == "vless" and inbound.get("streamSettings", {}).get("security") == "reality", sep="")
 
 
+def reality_domain_status():
+    # DNS resolution and public TCP connectivity are NOT REALITY handshake validation.
+    print("reality_client_server_address=", REALITY_CONNECT_HOST, sep="")
+    print("reality_public_port=443")
+    try:
+        records = socket.getaddrinfo(REALITY_CONNECT_HOST, 443, type=socket.SOCK_STREAM)
+        print("reality_domain_dns=", "RESOLVED" if records else "NO_RECORD", sep="")
+    except (socket.gaierror, OSError):
+        print("reality_domain_dns=FAILED")
+        print("reality_public_tcp_443=NOT_TESTED")
+        return
+    try:
+        with socket.create_connection((REALITY_CONNECT_HOST, 443), timeout=5):
+            print("reality_public_tcp_443=CONNECTED")
+    except OSError:
+        print("reality_public_tcp_443=FAILED")
+    print("reality_handshake=NOT_TESTED")
+    print("reality_sni=REFER_TO_EXISTING_CLIENT_AND_SERVER_CONFIG")
+
+
 def status():
     print("manager_release=2.3.1-rc2")
     osr = Path("/etc/os-release")
@@ -78,6 +99,8 @@ def status():
         m = re.search(r'^PRETTY_NAME=(.+)', osr.read_text(), re.M)
         if m:
             print("os=", m.group(1).strip('"'), sep="")
+    print("reality_client_server_address=", REALITY_CONNECT_HOST, sep="")
+    print("reality_public_port=443")
     for name, path in MANAGERS.items():
         print("script_", name, "=", version(path), sep="")
     for service in SERVICES:
@@ -201,12 +224,14 @@ def chain_test():
 
 def main():
     parser = argparse.ArgumentParser(description="Read-only live VPS diagnostics")
-    parser.add_argument("command", choices=("status", "backup-status", "chain-test", "xhttp-status"))
+    parser.add_argument("command", choices=("status", "backup-status", "chain-test", "xhttp-status", "reality-domain-status"))
     args = parser.parse_args()
     if args.command == "status":
         status()
     elif args.command == "backup-status":
         latest_backups()
+    elif args.command == "reality-domain-status":
+        reality_domain_status()
     elif args.command == "xhttp-status":
         print("xhttp_service=", systemctl("is-active", "myvps-xhttp.service"), sep="")
         print("xhttp_config_present=", Path("/etc/myvps/xhttp/config.json").is_file(), sep="")
