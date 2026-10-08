@@ -2,7 +2,7 @@
 
 这是 RackNerd / Debian VPS 的**非破坏性维护脚本**。目标是对**已稳定运行的 RackNerd VPS**进行兼容维护。当前不迁移生产 REALITY、住宅 SOCKS 链式出站或 Cloudflare WS；保留线上三个旧管理器并提供统一只读巡检和备份入口。
 
-> **当前为维护分支候选版本（RC）**，未合并 main。线上管理脚本 `/root/my_vps_manager.sh` 保持 v1.2.0，不覆盖。新备份辅助工具已经独立部署；新版综合管理器通过 `/usr/local/bin/myvps-next` 并行安装（不会劫持原 `myvps`）。
+> **当前为维护分支候选版本（RC）**，尚未合并 `main`。2026-10-08 已将新版并行部署到 VPS 的 `/opt/myvps/bin`，可使用 `/usr/local/bin/myvps-next`。原 `/root/my_vps_manager.sh` 仍为 v1.2.0，原 `myvps` 入口不变。备份辅助工具另行部署在 `/opt/myvps/backup`。
 
 ## 核心规则
 
@@ -50,6 +50,8 @@ myvps-next doctor
 myvps-next backup-status
 myvps-next chain-test
 ```
+
+生产 VPS 已通过以下实测：`status`、`backup-status`、`chain-test` 均成功；SOCKS5 认证、第二跳 TLS/HTTPS 均通过；线上原三份脚本 SHA-256 前后相同，nginx、REALITY、Fail2ban 保持 active。 [查看验收记录](https://github.com/Becauseiloveyo/blog/actions/runs/37742216241)。
 
 需要打开已有菜单时，只在人工交互式终端运行 `myvps-next legacy-main`、`myvps-next legacy-exit` 或 `myvps-next legacy-cf`。新版本候选阶段 `self-update` **禁用**，防止从尚未更新的 `main` 意外覆盖。
 
@@ -121,4 +123,4 @@ systemctl list-timers --all 'myvps-backup-*'
 
 ## 开发验收
 
-仓库内 `tests/smoke.sh` 和 GitHub Actions 执行 Bash 语法、帮助菜单及只读状态检查。候选分支在 VPS 实测、备份恢复验证及 nginx/Reality 连通性验证前不得合并为正式发布。
+仓库内 `tests/smoke.sh` 和 GitHub Actions 执行 Bash 语法、帮助菜单及只读状态检查。VPS 已通过并行部署、备份云端恢复验证和链式 SOCKS5 HTTPS 测试。正式替换原 `myvps` 命令之前，还需审查旧功能兼容性和新版本发布流程；不建议仅凭当前并行测试即直接覆盖。
