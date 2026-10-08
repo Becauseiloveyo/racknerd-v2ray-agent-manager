@@ -36,7 +36,7 @@ def run(args, timeout=8):
 
 def systemctl(*args):
     p = run(("systemctl", *args))
-    return p.stdout.strip() if p and p.returncode == 0 else "unavailable"
+    return p.stdout.strip() if p and p.stdout.strip() else "unavailable"
 
 
 def version(path):
